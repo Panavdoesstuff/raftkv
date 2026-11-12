@@ -495,6 +495,7 @@ Use closed-loop clients with 128 B values. Each config runs 60 s after a 10 s wa
 4. Run the 🔨 mutation checks: insert each bug, confirm a test fails, revert.
 5. Tick the phase's boxes in this file.
 6. Commit: `phase N: <summary>`.
+7. Push to GitHub right after each phase commit, one phase per push. Never batch several phases into one push.
 
 ---
 
