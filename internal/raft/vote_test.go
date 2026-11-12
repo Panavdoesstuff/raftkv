@@ -28,6 +28,13 @@ func newSolo(t *testing.T, term uint64, log []raft.Entry) *soloNode {
 	if len(log) > 0 {
 		st.Append(log)
 	}
+	return startSolo(t, st)
+}
+
+// startSolo starts n0 on the given durable state. Stop it and call startSolo
+// again with the same storage to simulate a crash and restart.
+func startSolo(t *testing.T, st raft.Storage) *soloNode {
+	t.Helper()
 	clk := clock.NewFake()
 	net := transport.NewMemnet(1, clk)
 	n := raft.New(raft.Config{

@@ -12,7 +12,11 @@ func (r *Raft) startElection() {
 	r.votes = 1
 	r.resetElectionTimer() // valid reset: starting an election
 	r.dbg("start election")
-	// Phase 3: persist (term, votedFor) before any RequestVote leaves.
+	// Our own vote must be durable before any RequestVote leaves, or a restart
+	// could vote again in this term for someone else.
+	if r.persistHardState() != nil {
+		return
+	}
 
 	if r.votes >= r.majority() { // single-node cluster
 		r.becomeLeader()
@@ -63,6 +67,9 @@ func (r *Raft) becomeLeader() {
 	// The no-op lets us commit entries from earlier terms (Figure 8) and
 	// learn the commit point without waiting for a client write.
 	r.appendLocal(Entry{Term: r.term, Type: EntryNoop})
+	if r.stopped { // storage failed
+		return
+	}
 	r.advanceCommit() // single-node cluster
 	r.broadcastHeartbeats()
 }
@@ -74,8 +81,18 @@ func (r *Raft) RequestVote(_ context.Context, a *RequestVoteArgs) (*RequestVoteR
 	if r.stopped {
 		return nil, ErrStopped
 	}
+	reply := r.handleRequestVote(a)
+	// Persist first: the reply (a vote, or news of our term) is a promise that
+	// must survive a crash. This also covers a refusal that raised our term.
+	if err := r.persistHardState(); err != nil {
+		return nil, err
+	}
+	return reply, nil
+}
+
+func (r *Raft) handleRequestVote(a *RequestVoteArgs) *RequestVoteReply {
 	if a.Term < r.term {
-		return &RequestVoteReply{Term: r.term}, nil
+		return &RequestVoteReply{Term: r.term}
 	}
 	if a.Term > r.term {
 		r.stepDown(a.Term)
@@ -88,11 +105,10 @@ func (r *Raft) RequestVote(_ context.Context, a *RequestVoteArgs) (*RequestVoteR
 		(a.LastLogTerm == r.lastTerm() && a.LastLogIndex >= r.lastIndex())
 	if !canVote || !upToDate {
 		r.dbg("vote refused", "candidate", a.CandidateID, "canVote", canVote, "upToDate", upToDate)
-		return &RequestVoteReply{Term: r.term}, nil
+		return &RequestVoteReply{Term: r.term}
 	}
 	r.votedFor = a.CandidateID
-	// Phase 3: persist (term, votedFor) before replying.
 	r.resetElectionTimer() // valid reset: granting a vote
 	r.dbg("vote granted", "candidate", a.CandidateID)
-	return &RequestVoteReply{Term: r.term, VoteGranted: true}, nil
+	return &RequestVoteReply{Term: r.term, VoteGranted: true}
 }

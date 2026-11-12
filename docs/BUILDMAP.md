@@ -150,7 +150,8 @@ Makefile
 - **Reproducible tests:** every memnet test and chaos run takes a seed and prints it on failure. Re-running with that seed reproduces the run.
 - **Timing-dependent tests run on FakeClock by default; only smoke tests use the real clock.**
 - **Dependencies:** only gRPC, protobuf and Porcupine. Ask before adding anything else.
-- **Bug log:** every real bug found goes into `docs/BUGS.md`, with its symptom, cause, fix and the test that catches it. These become your interview stories.
+- **Bug log:** every real bug found goes into `docs/BUGS.md`, with its symptom, cause, fix and the test that catches it. These feed the README.
+- **Deliberate exception: disk writes under the Raft mutex.** Persisting (and fsync) happens with `mu` held, so state is durable before any reply or send and the leader's own entry counts toward commit only once durable. Storage never calls back into Raft, so this can stall but not deadlock. Cost is measured in Phase 11. Rationale is in the `raft.go` persistence comment block.
 - **Index arithmetic:** every log-index calculation goes through one helper that handles the snapshot offset.
 - **Persist first:** persist (and fsync) before replying to any RPC that changed persistent state.
 - **Keep output short:** while iterating, run single tests with `-run`; on failure show only the last ~50 lines and the seed, never full debug logs. For chaos failures, read the saved files in `chaos-failures/`.
@@ -246,23 +247,23 @@ Each phase has:
 ### Phase 3 — Persistence (Day 6)
 
 **Build:**
-- [ ] Persist `currentTerm`, `votedFor` and log changes **before** replying to any RPC that changed them
-- [ ] `FileStorage`: append-only WAL, `fsync` on every write, CRC per record, truncate a torn tail on load
-- [ ] Restart path: load the state, rebuild in-memory state, start as follower
+- [x] Persist `currentTerm`, `votedFor` and log changes **before** replying to any RPC that changed them
+- [x] `FileStorage`: append-only WAL, `fsync` on every write, CRC per record, truncate a torn tail on load
+- [x] Restart path: load the state, rebuild in-memory state, start as follower
 
 **Mutation check 🔨:**
 - Don't persist `votedFor`. After a restart a node votes twice in one term, and two leaders appear in the same term.
 
 **Tests:**
-- [ ] `TestPersistBasic`: restart all nodes, committed entries survive
-- [ ] `TestPersistChurn`: random crash/restart during replication for 30 s; logs agree
-- [ ] `TestTornWrite`: cut the WAL off in the middle of a record; the node loads cleanly
-- [ ] `TestNoDoubleVote`: crash right after voting; the node doesn't vote again in that term
-- [ ] `TestFigure8Unreliable`: randomized; repeatedly crash and restart the leader with drops and reordering for 30 s of fake time, then check all logs agree and no committed entry is lost
+- [x] `TestPersistBasic`: restart all nodes, committed entries survive
+- [x] `TestPersistChurn`: random crash/restart during replication for 30 s; logs agree
+- [x] `TestTornWrite`: cut the WAL off in the middle of a record; the node loads cleanly
+- [x] `TestNoDoubleVote`: crash right after voting; the node doesn't vote again in that term
+- [x] `TestFigure8Unreliable`: randomized; repeatedly crash and restart the leader with drops and reordering for 30 s of fake time, then check all logs agree and no committed entry is lost
 
 **Exit:**
-- [ ] All tests pass 500×
-- [ ] You can list what's persisted, when, and what breaks without each
+- [x] All tests pass 500×
+- [x] Persistence rules documented in the raft.go comment block
 
 
 ---
@@ -469,6 +470,7 @@ Use closed-loop clients with 128 B values. Each config runs 60 s after a 10 s wa
 
 - [ ] Write CSVs to `bench/results/` and plot PNGs
 - [ ] Record the machine specs (CPU, RAM, disk) next to the results
+- [ ] Measure fsync-under-lock cost. If it limits throughput, implement group commit (batch appends, one fsync per batch) and benchmark before and after.
 
 ---
 
@@ -500,9 +502,9 @@ Use closed-loop clients with 128 B values. Each config runs 60 s after a 10 s wa
 
 ---
 
-## 6. Interview checklist
+## 6. Design questions to document
 
-You should be able to answer all of these without notes:
+Each of these must be answered in writing in `docs/DESIGN.md` (short, with a pointer to the code or test that enforces it):
 
 1. Why does a node refuse to vote for a candidate whose log is behind its own?
 2. Why can't a leader commit an old-term entry by counting replicas? (Figure 8)

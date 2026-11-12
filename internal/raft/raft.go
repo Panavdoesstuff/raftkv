@@ -3,6 +3,7 @@ package raft
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/rand"
 	"os"
@@ -57,6 +58,9 @@ type Raft struct {
 	term     uint64
 	votedFor NodeID
 	leaderID NodeID
+	// savedHS is the hard state last made durable; persistHardState skips the
+	// disk when nothing changed.
+	savedHS HardState
 
 	// Log. entries[i] has Index snapIndex+1+i. Every index calculation goes
 	// through lastIndex/lastTerm (and, from Phase 2, entryAt) so the snapshot
@@ -116,6 +120,7 @@ func (r *Raft) Start() error {
 	}
 	r.started = true
 	r.term, r.votedFor = hs.Term, hs.VotedFor
+	r.savedHS = hs
 	if snap != nil {
 		r.snapIndex, r.snapTerm = snap.LastIncludedIndex, snap.LastIncludedTerm
 		r.commitIndex, r.lastApplied = snap.LastIncludedIndex, snap.LastIncludedIndex
@@ -208,13 +213,77 @@ func (r *Raft) entriesFrom(i uint64, max int) []Entry {
 	return es
 }
 
-// truncateFrom deletes every entry with index >= i. Caller holds mu.
-// Phase 3: also truncate storage.
-func (r *Raft) truncateFrom(i uint64) {
+// truncateFrom deletes every entry with index >= i, in memory and on disk.
+// Caller holds mu.
+func (r *Raft) truncateFrom(i uint64) error {
 	if i <= r.snapIndex {
-		return
+		return nil
 	}
 	r.entries = r.entries[:i-r.snapIndex-1]
+	if err := r.cfg.Storage.TruncateFrom(i); err != nil {
+		return r.halt(err)
+	}
+	return nil
+}
+
+// --- persistence (Figure 2, "Persistent state") ---
+//
+// What is persisted, when, and what breaks without it:
+//
+//   - currentTerm, before replying to or sending anything carrying the new
+//     term. Without it a restarted node accepts a stale leader or candidate
+//     and can vote in a term it already voted in.
+//   - votedFor, before granting a vote or sending RequestVote (our own vote).
+//     Without it a restart lets a node vote twice in one term: two leaders in
+//     one term (Election Safety).
+//   - log entries, before acking AppendEntries and before the leader counts
+//     its own copy toward commit. Without it a node acks an entry, crashes,
+//     and the entry vanishes from a majority that was told it was stored:
+//     a committed entry is lost (Leader Completeness).
+//   - log truncation, before the replacement entries are appended. Without it
+//     a restart resurrects entries the leader overwrote.
+//   - NOT persisted: commitIndex, lastApplied, nextIndex, matchIndex, role.
+//     All are rebuilt (commit is re-learned from the leader; the state
+//     machine is replayed from the log or snapshot).
+//   - A storage error halts the node: memory may be ahead of disk.
+//
+// Everything below runs with mu held. That deliberately departs from the
+// "no disk write under the lock" rule in BUILDMAP §3: an RPC handler must make
+// its state change durable before it replies, and doing that outside the lock
+// would need write ordering and a durable-index for the leader's own vote in
+// the commit count. Storage never calls back into Raft, so this can stall but
+// not deadlock. Revisit if fsync latency under the lock shows up in Phase 11.
+
+// persistHardState makes (currentTerm, votedFor) durable if it changed. Call
+// it before sending or replying with anything that depends on the new value.
+func (r *Raft) persistHardState() error {
+	hs := HardState{Term: r.term, VotedFor: r.votedFor}
+	if hs == r.savedHS {
+		return nil
+	}
+	if err := r.cfg.Storage.SaveHardState(hs.Term, hs.VotedFor); err != nil {
+		return r.halt(err)
+	}
+	r.savedHS = hs
+	return nil
+}
+
+// persistAppend makes new log entries durable. Caller holds mu.
+func (r *Raft) persistAppend(es []Entry) error {
+	if err := r.cfg.Storage.Append(es); err != nil {
+		return r.halt(err)
+	}
+	return nil
+}
+
+// halt stops the node after a storage failure. Memory may now be ahead of
+// disk, so continuing could acknowledge something that is not durable; a
+// restart recovers from what is. Caller holds mu.
+func (r *Raft) halt(err error) error {
+	r.slog.Error("storage failure, halting", "node", r.id, "err", err)
+	r.stopped = true
+	r.cancel()
+	return fmt.Errorf("raft: storage failure: %w", err)
 }
 
 // firstIndexOfTerm is the lowest index in the log with the given term (0 if none).

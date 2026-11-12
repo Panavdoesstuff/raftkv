@@ -126,16 +126,22 @@ func (r *Raft) Propose(cmd []byte) (index, term uint64, isLeader bool) {
 		return 0, 0, false
 	}
 	index = r.appendLocal(Entry{Term: r.term, Type: EntryNormal, Data: append([]byte(nil), cmd...)})
+	if r.stopped { // storage failed: the entry is not durable
+		return 0, 0, false
+	}
 	r.advanceCommit() // single-node cluster
 	r.broadcastHeartbeats()
 	return index, r.term, true
 }
 
-// appendLocal appends e to our log and returns its index. Caller holds mu.
-// Phase 3: persist (and fsync) before the entry is replicated.
+// appendLocal appends e to our log, durably, and returns its index. Durable
+// before replication matters because advanceCommit counts the leader's own
+// copy toward the majority. If the write fails the node halts (r.stopped).
+// Caller holds mu.
 func (r *Raft) appendLocal(e Entry) uint64 {
 	e.Index = r.lastIndex() + 1
 	r.entries = append(r.entries, e)
+	r.persistAppend([]Entry{e})
 	return e.Index
 }
 
@@ -157,6 +163,10 @@ func (r *Raft) AppendEntries(_ context.Context, a *AppendEntriesArgs) (*AppendEn
 		// Two leaders in one term would break Election Safety; never accept.
 		r.dbg("AppendEntries from another leader in our term", "from", a.LeaderID)
 		return &AppendEntriesReply{Term: r.term}, nil
+	}
+	// A newer term must be durable before we reply or touch the log.
+	if err := r.persistHardState(); err != nil {
+		return nil, err
 	}
 	r.leaderID = a.LeaderID
 	r.resetElectionTimer() // valid reset: AppendEntries from the current leader
@@ -182,12 +192,16 @@ func (r *Raft) AppendEntries(_ context.Context, a *AppendEntriesArgs) (*AppendEn
 			if r.termAt(idx) == e.Term {
 				continue
 			}
-			r.truncateFrom(idx)
+			if err := r.truncateFrom(idx); err != nil {
+				return nil, err
+			}
 		}
-		for _, ne := range a.Entries[i:] {
-			r.entries = append(r.entries, ne.Clone())
+		added := CloneEntries(a.Entries[i:])
+		r.entries = append(r.entries, added...)
+		if err := r.persistAppend(added); err != nil { // durable before we ack
+			return nil, err
 		}
-		break // Phase 3: persist before replying
+		break
 	}
 
 	// Commit up to the last entry this RPC vouches for, never past it: we may
