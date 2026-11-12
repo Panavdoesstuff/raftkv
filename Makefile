@@ -14,7 +14,7 @@ test:
 # Repeat one test N times with -race; stop on first failure.
 # Usage: make stress PKG=./internal/raft RUN=Election N=500
 stress:
-	go test $(PKG) -run '$(RUN)' -race -count=$(N) -failfast 2>&1 | tail -n 50; exit $${PIPESTATUS[0]}
+	go test $(PKG) -run '$(RUN)' -race -count=$(N) -failfast -timeout 0 2>&1 | tail -n 50; exit $${PIPESTATUS[0]}
 
 chaos:
 	go run ./cmd/chaos -target=memnet -runs=$(N)

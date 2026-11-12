@@ -191,24 +191,24 @@ Each phase has:
 ### Phase 1 — Leader election (Days 2–3)
 
 **Build:**
-- [ ] Follower / Candidate / Leader states, terms, `votedFor`
-- [ ] Randomised election timeout (150–300 ms) and heartbeats (50 ms), both from `Clock`
-- [ ] `RequestVote` with the up-to-date-log check
-- [ ] Step down when any request or reply has a higher term
-- [ ] Reset the election timer **only** when granting a vote, receiving AppendEntries from the current leader, or starting an election
+- [x] Follower / Candidate / Leader states, terms, `votedFor`
+- [x] Randomised election timeout (150–300 ms) and heartbeats (50 ms), both from `Clock`
+- [x] `RequestVote` with the up-to-date-log check
+- [x] Step down when any request or reply has a higher term
+- [x] Reset the election timer **only** when granting a vote, receiving AppendEntries from the current leader, or starting an election
 
 **Mutation check 🔨:**
 - Remove the up-to-date-log check. A node with a stale log can win, and a later test loses committed data.
 - Use a fixed timeout instead of a random one. Split votes repeat forever.
 
 **Tests:**
-- [ ] `TestInitialElection`: exactly one leader, all nodes agree on the term
-- [ ] `TestReElection`: leader disconnected → new leader; old leader rejoins → it steps down
-- [ ] `TestNoLeaderWithoutMajority`
-- [ ] `TestManyElections`: random disconnects for 10 s; at most one leader per term at all times
+- [x] `TestInitialElection`: exactly one leader, all nodes agree on the term
+- [x] `TestReElection`: leader disconnected → new leader; old leader rejoins → it steps down
+- [x] `TestNoLeaderWithoutMajority`
+- [x] `TestManyElections`: random disconnects for 10 s; at most one leader per term at all times
 
 **Exit:**
-- [ ] `make stress RUN=Election N=500` passes
+- [x] `make stress RUN=Election N=500` passes
 
 
 ---
