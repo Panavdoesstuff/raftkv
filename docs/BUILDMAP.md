@@ -185,7 +185,6 @@ Each phase has:
 
 **Exit:**
 - [x] `make test` passes (no Raft logic yet, just the harness)
-- [ ] You can draw Figure 2's state and RPCs from memory
 
 ---
 
@@ -259,6 +258,7 @@ Each phase has:
 - [ ] `TestPersistChurn`: random crash/restart during replication for 30 s; logs agree
 - [ ] `TestTornWrite`: cut the WAL off in the middle of a record; the node loads cleanly
 - [ ] `TestNoDoubleVote`: crash right after voting; the node doesn't vote again in that term
+- [ ] `TestFigure8Unreliable`: randomized; repeatedly crash and restart the leader with drops and reordering for 30 s of fake time, then check all logs agree and no committed entry is lost
 
 **Exit:**
 - [ ] All tests pass 500×
