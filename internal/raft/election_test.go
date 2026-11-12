@@ -6,12 +6,27 @@ import (
 	"time"
 
 	"github.com/panavdoesstuff/raftkv/internal/raft"
+	"github.com/panavdoesstuff/raftkv/test"
 )
 
+// TestInitialElection is the one real-clock smoke test: it covers real timers
+// and goroutine scheduling. Everything else runs on FakeClock.
 func TestInitialElection(t *testing.T) {
+	c := newRealCluster(t, 3)
+	leader := c.CheckOneLeader()
+	time.Sleep(300 * time.Millisecond) // heartbeats must keep everyone quiet
+	checkSettled(t, c, leader)
+}
+
+func TestInitialElectionFakeClock(t *testing.T) {
 	c := newCluster(t, 3)
 	leader := c.CheckOneLeader()
 	advance(c, time.Second) // heartbeats must keep everyone quiet
+	checkSettled(t, c, leader)
+}
+
+func checkSettled(t *testing.T, c *test.Cluster, leader raft.NodeID) {
+	t.Helper()
 
 	term := status(c, leader).Term
 	if term == 0 {

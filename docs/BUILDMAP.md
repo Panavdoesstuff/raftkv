@@ -148,6 +148,7 @@ Makefile
 - **All networking goes through `Transport`.**
 - **Logging:** `log/slog` with `node`, `term`, `role` on every line. Debug is off by default; turn it on with `RAFT_DEBUG=1`.
 - **Reproducible tests:** every memnet test and chaos run takes a seed and prints it on failure. Re-running with that seed reproduces the run.
+- **Timing-dependent tests run on FakeClock by default; only smoke tests use the real clock.**
 - **Dependencies:** only gRPC, protobuf and Porcupine. Ask before adding anything else.
 - **Bug log:** every real bug found goes into `docs/BUGS.md`, with its symptom, cause, fix and the test that catches it. These become your interview stories.
 - **Index arithmetic:** every log-index calculation goes through one helper that handles the snapshot offset.

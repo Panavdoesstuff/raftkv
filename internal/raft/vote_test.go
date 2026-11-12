@@ -44,7 +44,7 @@ func newSolo(t *testing.T, term uint64, log []raft.Entry) *soloNode {
 func (s *soloNode) advance(d time.Duration) {
 	for ; d > 0; d -= 10 * time.Millisecond {
 		s.clk.Advance(10 * time.Millisecond)
-		time.Sleep(2 * time.Millisecond)
+		time.Sleep(settleTime)
 	}
 }
 
