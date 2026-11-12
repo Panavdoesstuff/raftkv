@@ -495,8 +495,9 @@ Use closed-loop clients with 128 B values. Each config runs 60 s after a 10 s wa
 1. New session: "Read `docs/BUILDMAP.md`. Do Phase N."
 2. Write the phase's tests first, then the implementation.
 3. Run the targeted tests, then the stress command.
+   Before committing, also run the **full suite 50× with `-race`** (`make stress RUN=. N=50`), not just this phase's tests.
 4. Run the 🔨 mutation checks: insert each bug, confirm a test fails, revert.
-5. Tick the phase's boxes in this file.
+5. Tick the phase's boxes in this file, and **answer the phase's design questions in `docs/DESIGN.md`**.
 6. Commit: `phase N: <summary>`.
 7. Push to GitHub right after each phase commit, one phase per push. Never batch several phases into one push.
 
