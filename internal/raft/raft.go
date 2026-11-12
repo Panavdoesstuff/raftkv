@@ -167,6 +167,7 @@ func (r *Raft) Status() Status {
 	return Status{
 		ID: r.id, Role: r.role, Term: r.term,
 		CommitIndex: r.commitIndex, LastApplied: r.lastApplied, LastIndex: r.lastIndex(),
+		Leader: r.leaderID,
 	}
 }
 

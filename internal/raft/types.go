@@ -180,4 +180,5 @@ type Status struct {
 	CommitIndex uint64
 	LastApplied uint64
 	LastIndex   uint64
+	Leader      NodeID // who this node believes leads ("" if unknown); a client hint only
 }

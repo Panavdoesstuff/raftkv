@@ -271,23 +271,25 @@ Each phase has:
 ### Phase 4 — KV store and client (Days 7–8)
 
 **Build:**
-- [ ] `Get`, `Put` and `Append` all go through the log (later phases speed up reads)
-- [ ] Every client has a `clientID` and a monotonically increasing `seq`
-- [ ] Dedup table `clientID → (lastSeq, lastResult)`. A retry returns the cached result instead of applying again
-- [ ] The server waits for its log index to apply. If a different entry lands there, it returns `ErrWrongLeader`
-- [ ] Client: leader hints, rotating through servers, retries with backoff, timeouts
+- [x] `Get`, `Put` and `Append` all go through the log (later phases speed up reads)
+- [x] Every client has a `clientID` and a monotonically increasing `seq`
+- [x] Dedup table `clientID → (lastSeq, lastResult)`. A retry returns the cached result instead of applying again
+- [x] The server waits for its log index to apply. If a different entry lands there, it returns `ErrWrongLeader`
+- [x] Client: leader hints, rotating through servers, retries with backoff, timeouts
 
 **Mutation check 🔨:**
 - Remove dedup, then drop replies. An `Append` gets applied twice.
+- Remove the term check when an index applies in `Server.Command`. A lost-leadership Put is answered with another entry's result (`TestKVLostLeadershipNoFalseSuccess`).
 
 **Tests:**
-- [ ] `TestKVBasic`
-- [ ] `TestKVConcurrentClients`: 10 clients, unreliable network, leader churn
-- [ ] `TestKVAppendExactlyOnce`: every appended token appears exactly once
-- [ ] `TestKVPartitionedLeader`: a client on the minority side never gets a stale success
+- [x] `TestKVBasic`
+- [x] `TestKVConcurrentClients`: 10 clients, unreliable network, leader churn
+- [x] `TestKVAppendExactlyOnce`: every appended token appears exactly once
+- [x] `TestKVPartitionedLeader`: a client on the minority side never gets a stale success
+- [x] `TestKVLostLeadershipNoFalseSuccess`: an old leader's proposals are overwritten at the same indexes after a partition heals; it never answers them with success
 
 **Exit:**
-- [ ] All tests pass 200×
+- [x] All tests pass 200×
 
 
 ---

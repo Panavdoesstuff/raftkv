@@ -71,3 +71,31 @@ Tests: `TestFileTornTail` (cut at every byte of the last record), `TestFileCorru
 ### Why disk writes happen under the Raft mutex
 
 This is a deliberate exception to the "no disk write under the lock" rule. State must be durable before the reply, and the leader's own entry counts toward commit only once durable. Doing the write outside the lock would need write ordering plus a durable-index in the commit count. Storage never calls back into Raft, so this can stall but not deadlock. Phase 11 measures the cost and implements group commit if it limits throughput.
+
+## Phase 4 — KV store and client
+
+### 4. The leader crashes after replicating your write but before replying. What happens?
+
+The client sees a timeout or error, which means **unknown outcome**, not failure. The entry may be on a majority, in which case the next leader commits it (its no-op commit covers inherited entries), or it may not be, in which case it is overwritten. The client can't tell which, so it retries the same `(clientID, seq)` against another server. If the write had committed, the dedup table returns the cached result and nothing is applied twice; if not, it is applied now, once. `TestKVConcurrentClients` crashes leaders under load and `TestKVAppendExactlyOnce` drops half the replies.
+
+A server that proposed at index *i* in term *t* also stops waiting once it is no longer leader of *t*, or when an entry with a different term applies at *i*, and answers `ErrWrongLeader` ([server.go](../internal/kv/server.go)). The entry may still commit later at another index; that is fine for the same reason.
+
+### 5. How do retried requests avoid being applied twice?
+
+Each client has an ID and a counter, with one request outstanding at a time. A retry reuses the same `seq`. The dedup table `clientID → (lastSeq, lastResult)` lives **inside the state machine** and is updated in `Apply` ([store.go](../internal/kv/store.go)), so every replica makes the same decision from the same log. A request with `seq <= lastSeq` is not executed; `seq == lastSeq` returns the cached result. Putting dedup in `Apply` rather than in the server matters: a retry that reaches a new leader after failover is checked against a table rebuilt by replaying the same log.
+
+Gets are deduped too, so a retried Get returns the value from its first execution, which is inside the client's call interval and therefore still linearizable.
+
+The table is part of `Snapshot`/`Restore` so a restart from a snapshot (Phase 5) doesn't forget it.
+
+Tests: `TestKVDedupDirect` (same seq twice, no network loss), `TestKVAppendExactlyOnce` (50% lost replies, every token exactly once and in order). Mutation: disabling the `seq` check fails both plus `TestKVConcurrentClients`.
+
+### Partitioned leader
+
+A leader in a minority can accept a proposal but never commits it, so its server never gets an apply and the request ends in `ErrTimeout` or `ErrWrongLeader`; the client never sees success. Reads also go through the log in this phase, so a stale read is impossible by construction. `TestKVPartitionedLeader`.
+
+### Lost leadership: the term check
+
+The server proposes at index *i* in term *t* and waits. If it is partitioned, a new leader may commit a different entry at *i*, and after the heal the old leader applies that entry at *i*. Index alone can't tell the waiter its own request from the replacement, so the waiter compares the applied entry's **term** with the one it proposed in, and answers `ErrWrongLeader` on a mismatch ([server.go](../internal/kv/server.go)). The 50 ms "still leader of my term?" check usually catches this first, but it is a poll, so the term check is what makes it deterministic.
+
+`TestKVLostLeadershipNoFalseSuccess`: the old leader takes two Puts at N and N+1, is partitioned, the majority puts its own no-op at N and its own Put at N+1, then the partition heals. (The new leader's no-op never reaches `Apply`, so only the Put at N+1 exercises the check.) Mutation: removing the term check makes the Put at N+1 return success; 10 or more of 20 runs fail.
