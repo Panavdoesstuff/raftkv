@@ -1,0 +1,43 @@
+syntax = "proto3";
+package raftkv.admin;
+option go_package = "github.com/panavdoesstuff/raftkv/proto/adminpb";
+
+message StatusRequest {}
+message StatusReply {
+  string id = 1;
+  string role = 2;
+  uint64 term = 3;
+  uint64 commit_index = 4;
+  uint64 last_applied = 5;
+  string leader_id = 6;
+  repeated string config = 7;
+}
+
+// One rule per directed (from, to) link. Zero values mean "no fault".
+message NetRule {
+  string from = 1;
+  string to = 2;
+  bool block = 3;
+  double drop_prob = 4;
+  int64 delay_min_ms = 5;
+  int64 delay_max_ms = 6;
+  double dup_prob = 7;
+  bool reorder = 8;
+}
+message SetNetRulesRequest {
+  repeated NetRule rules = 1;
+  bool clear_all = 2;
+}
+message SetNetRulesReply {}
+
+message SetClockRequest {
+  int64 offset_ms = 1;
+  double drift_rate = 2; // 1.0 = real time
+}
+message SetClockReply {}
+
+service Admin {
+  rpc Status(StatusRequest) returns (StatusReply);
+  rpc SetNetRules(SetNetRulesRequest) returns (SetNetRulesReply);
+  rpc SetClock(SetClockRequest) returns (SetClockReply);
+}

@@ -1,0 +1,4 @@
+chaos-failures/
+*.test
+*.out
+.DS_Store
