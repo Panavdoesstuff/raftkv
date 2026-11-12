@@ -217,29 +217,29 @@ Each phase has:
 ### Phase 2 — Log replication and commit (Days 3–5)
 
 **Build:**
-- [ ] `AppendEntries` with the `prevLogIndex`/`prevLogTerm` consistency check
-- [ ] Truncate a follower's log **only** from the first conflicting entry. Never truncate entries that match
-- [ ] Leader state: `nextIndex[]`, `matchIndex[]`
-- [ ] Fast backtracking: replies carry `conflictTerm` and `conflictIndex`
-- [ ] Commit rule: advance `commitIndex` to N only if a majority has `matchIndex >= N` **and** `log[N].term == currentTerm` (Figure 8)
-- [ ] The new leader appends a **no-op** entry on election
-- [ ] An apply loop that delivers committed entries to `ApplyCh` in order, exactly once
+- [x] `AppendEntries` with the `prevLogIndex`/`prevLogTerm` consistency check
+- [x] Truncate a follower's log **only** from the first conflicting entry. Never truncate entries that match
+- [x] Leader state: `nextIndex[]`, `matchIndex[]`
+- [x] Fast backtracking: replies carry `conflictTerm` and `conflictIndex`
+- [x] Commit rule: advance `commitIndex` to N only if a majority has `matchIndex >= N` **and** `log[N].term == currentTerm` (Figure 8)
+- [x] The new leader appends a **no-op** entry on election
+- [x] An apply loop that delivers committed entries to `ApplyCh` in order, exactly once
 
 **Mutation check 🔨:**
 - Commit an old-term entry by counting replicas. Reproduce Figure 8 in a test.
 - Truncate on any `AppendEntries`, even when entries match. A delayed, reordered RPC erases committed entries.
 
 **Tests:**
-- [ ] `TestBasicAgree`
-- [ ] `TestFailAgree`: a follower disconnects and reconnects, then catches up
-- [ ] `TestFailNoAgree`: no commit without a majority
-- [ ] `TestRejoin`: an old leader with uncommitted entries rejoins, and those entries are overwritten
-- [ ] `TestBackup`: a follower 50+ entries behind with a conflicting log catches up quickly
-- [ ] `TestFigure8`: a scripted scenario from the paper
-- [ ] `TestReorderedAppends`: memnet delivers out of order; no committed entry is ever lost
+- [x] `TestBasicAgree`
+- [x] `TestFailAgree`: a follower disconnects and reconnects, then catches up
+- [x] `TestFailNoAgree`: no commit without a majority
+- [x] `TestRejoin`: an old leader with uncommitted entries rejoins, and those entries are overwritten
+- [x] `TestBackup`: a follower 50+ entries behind with a conflicting log catches up quickly
+- [x] `TestFigure8`: a scripted scenario from the paper
+- [x] `TestReorderedAppends`: memnet delivers out of order; no committed entry is ever lost
 
 **Exit:**
-- [ ] All tests pass 500× with `-race`
+- [x] All tests pass 500× with `-race`
 
 
 ---

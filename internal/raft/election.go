@@ -59,7 +59,11 @@ func (r *Raft) becomeLeader() {
 	r.role = Leader
 	r.leaderID = r.id
 	r.dbg("became leader")
-	// Phase 2: initialise nextIndex/matchIndex and append the no-op entry.
+	r.initLeaderState()
+	// The no-op lets us commit entries from earlier terms (Figure 8) and
+	// learn the commit point without waiting for a client write.
+	r.appendLocal(Entry{Term: r.term, Type: EntryNoop})
+	r.advanceCommit() // single-node cluster
 	r.broadcastHeartbeats()
 }
 

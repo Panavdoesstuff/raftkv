@@ -37,6 +37,12 @@ func (n *stubNode) Start() error {
 	n.log = log
 	return nil
 }
+func (n *stubNode) Propose([]byte) (uint64, uint64, bool) { return 0, 0, false }
+func (n *stubNode) ApplyCh() <-chan raft.ApplyMsg {
+	ch := make(chan raft.ApplyMsg)
+	close(ch)
+	return ch
+}
 func (n *stubNode) Stop() { n.mu.Lock(); n.stop = true; n.mu.Unlock() }
 func (n *stubNode) Status() raft.Status {
 	n.mu.Lock()

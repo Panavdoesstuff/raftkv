@@ -7,6 +7,7 @@ import (
 	"errors"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/panavdoesstuff/raftkv/internal/clock"
@@ -35,7 +36,13 @@ type Memnet struct {
 	dupProb  float64
 	delayMin time.Duration
 	delayMax time.Duration
+
+	appendSent atomic.Uint64
 }
+
+// AppendEntriesSent counts AppendEntries calls attempted so far (dropped or
+// not). Tests use it to check that catch-up takes few round trips.
+func (n *Memnet) AppendEntriesSent() uint64 { return n.appendSent.Load() }
 
 func NewMemnet(seed int64, clk clock.Clock) *Memnet {
 	return &Memnet{
@@ -218,6 +225,7 @@ func (p *memPeer) RequestVote(ctx context.Context, a *raft.RequestVoteArgs) (*ra
 }
 
 func (p *memPeer) AppendEntries(ctx context.Context, a *raft.AppendEntriesArgs) (*raft.AppendEntriesReply, error) {
+	p.n.appendSent.Add(1)
 	return call(p.n, ctx, p.from, p.to, a,
 		(*raft.AppendEntriesArgs).Clone,
 		func(h raft.Peer, ctx context.Context, a *raft.AppendEntriesArgs) (*raft.AppendEntriesReply, error) {
