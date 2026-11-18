@@ -2,3 +2,4 @@ chaos-failures/
 *.test
 *.out
 .DS_Store
+stress.log
