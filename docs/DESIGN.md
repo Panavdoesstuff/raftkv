@@ -148,3 +148,28 @@ Dedup lives in the state machine, so it is rebuilt by replaying the log. Once th
 ### Other tests
 
 `TestSnapshotBoundedLog` (Raft and KV level), `TestSnapshotInstall` (node offline for 10k entries), `TestSnapshotRestart`, the raft-level `TestSnapshotChurn`, and storage tests for torn or damaged snapshot files (`TestFileSnapshotTmpLeftoverIgnored`, `TestFileSnapshotCorruptIsError`, `TestFileSnapshotOlderIgnored`).
+
+## Phase 6 — Linearizable reads
+
+### 6. How does ReadIndex work, and why does it need a current-term commit?
+
+A Get does not have to be logged to be linearizable; it only has to observe every write that finished before it started. `Raft.ReadIndex` ([readindex.go](../internal/raft/readindex.go)) does that in four steps (thesis §6.4):
+
+1. **Current-term commit.** The leader refuses (`ErrNotReady`) until `termAt(commitIndex) == currentTerm`, i.e. its no-op has committed.
+2. **readIndex = commitIndex.**
+3. **Confirm leadership.** Send a heartbeat round *after* the read arrived and wait for a majority to ack it. This is the step that stops a deposed leader that has not noticed yet from answering.
+4. **Wait for `lastApplied >= readIndex`**, then read the local store.
+
+**Why step 1.** A new leader's `commitIndex` is only what it has learned so far, and it starts at whatever it had as a follower. Entries that the previous leader committed (and told clients about) may sit after that, so a `commitIndex` read right after the election can be behind a write the client has seen succeed. The leader cannot know the true commit point until it commits something in its own term: by the Figure 8 rule that commit also commits everything before it, and `commitIndex` is then at least every previously committed entry (Leader Completeness). That is also why every new leader appends a no-op. `TestReadIndexNeedsCurrentTermCommit`; the KV server waits and retries on `ErrNotReady`.
+
+**Batching.** Each broadcast has a sequence number; a read records `need = sendSeq + 1`, the first broadcast sent after it arrived, and each peer tracks the highest number it acked. A read is confirmed when a majority acked a number `>= need`. Reads that arrive while a round is outstanding queue behind it and share the next one (started when the current one completes). `TestReadIndexBatching`: 20 reads, one round.
+
+**Step 3 under partition.** The isolated old leader never gets acks, so its read waits; once it hears of the new term it fails with `ErrNotLeader`. `TestReadIndexPartitionedLeader`; mutation: skipping step 3 makes it return a read on the cut-off leader (fails 5/5 runs, and `TestReadIndexRefusesUnderSkew` fails too).
+
+**Lease reads** ([lease.go](../internal/raft/lease.go), `--read-mode=lease`, `kv.WithReadMode`) skip step 3 while `now < lastMajorityAck + electionTimeoutMin - margin`, on the leader's own Clock. `lastMajorityAck` is the time the acked round was *sent*: a follower's promise not to vote starts no earlier than the send, so counting from the arrival of a slow ack would stretch the lease past what followers promised. When the lease lapses the server falls back to ReadIndex.
+
+### 7. How does clock drift break lease reads? (preliminary; Phase 10 adds the Porcupine visualisation)
+
+The lease argument is: a follower that acked at time T will not vote for another leader before T + `electionTimeoutMin` *on its clock*, so no rival can exist before T + `electionTimeoutMin` *on the leader's clock*, provided both clocks run at (nearly) the same speed. The margin covers only a small drift. If the leader's clock runs slow, its lease outlives the followers' real timeouts: the followers elect a new leader and commit writes while the old leader, partitioned and still in office, believes it has time left and answers from its local state.
+
+`TestLeaseReadSkew` builds exactly that with a `SkewedClock` (rate 0.05) over the FakeClock: partition the leader and slow its clock at the same instant, let the majority elect and write `k=v1`, then read `k` from the old leader. It answers `v0`, every run. Controls: with rate 1 (`TestLeaseReadSafeWithoutSkew`) the lease expires and the read cannot answer, and `TestReadIndexRefusesUnderSkew` shows ReadIndex does not answer under the same skew, because it needs a majority round that cannot happen.

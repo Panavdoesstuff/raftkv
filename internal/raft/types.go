@@ -192,4 +192,8 @@ type Status struct {
 	LastIndex   uint64
 	SnapIndex   uint64 // last index covered by the snapshot (0 if none)
 	Leader      NodeID // who this node believes leads ("" if unknown); a client hint only
+	// Leader-only read-path counters: heartbeat broadcasts so far this term,
+	// and ReadIndex calls waiting for a majority-acked round.
+	Rounds       uint64
+	PendingReads int
 }

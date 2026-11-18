@@ -106,3 +106,39 @@ func TestRealClockTimer(t *testing.T) {
 		t.Fatal("real timer did not fire")
 	}
 }
+
+func TestSkewedClockDrift(t *testing.T) {
+	f := NewFake()
+	s := NewSkewed(f, time.Hour, 0.5)
+	t0 := s.Now()
+	if d := t0.Sub(f.Now()); d != time.Hour {
+		t.Fatalf("offset = %v, want 1h", d)
+	}
+	f.Advance(10 * time.Second)
+	if d := s.Now().Sub(t0); d != 5*time.Second {
+		t.Fatalf("slow clock advanced %v for 10s of base time, want 5s", d)
+	}
+	s.SetRate(2)
+	f.Advance(10 * time.Second)
+	if d := s.Now().Sub(t0); d != 25*time.Second {
+		t.Fatalf("after SetRate(2) advanced %v total, want 25s", d)
+	}
+	s.SetOffset(-5 * time.Second)
+	if d := s.Now().Sub(t0); d != 20*time.Second {
+		t.Fatalf("after SetOffset(-5s) advanced %v, want 20s", d)
+	}
+}
+
+func TestSkewedTimerScaled(t *testing.T) {
+	f := NewFake()
+	s := NewSkewed(f, 0, 0.5) // slow: 100 ms local takes 200 ms of base time
+	tm := s.NewTimer(100 * time.Millisecond)
+	f.Advance(150 * time.Millisecond)
+	if recv(tm.C()) {
+		t.Fatal("slow-clock timer fired early")
+	}
+	f.Advance(50 * time.Millisecond)
+	if !recv(tm.C()) {
+		t.Fatal("slow-clock timer did not fire at 200 ms base time")
+	}
+}

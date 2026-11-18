@@ -52,8 +52,10 @@ func (s *stubRaft) Propose([]byte) (uint64, uint64, bool) { return s.index, 1, t
 func (s *stubRaft) Status() raft.Status {
 	return raft.Status{Role: raft.Leader, Term: 1}
 }
-func (s *stubRaft) LogSize() int            { return 0 }
-func (s *stubRaft) Snapshot(uint64, []byte) {}
+func (s *stubRaft) LogSize() int                              { return 0 }
+func (s *stubRaft) Snapshot(uint64, []byte)                   {}
+func (s *stubRaft) ReadIndex(context.Context) (uint64, error) { return 0, raft.ErrNotLeader }
+func (s *stubRaft) LeaseRead(context.Context) (uint64, error) { return 0, raft.ErrNotLeader }
 
 // TestKVRestoreFailsWaiters: a request waiting on an index that a snapshot
 // install jumps over must be answered ErrWrongLeader, not left to hang.

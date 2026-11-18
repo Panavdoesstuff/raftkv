@@ -322,26 +322,26 @@ Each phase has:
 ### Phase 6 — Linearizable reads: ReadIndex and leases (Days 11–12)
 
 **Build:**
-- [ ] **ReadIndex** (thesis §6.4):
+- [x] **ReadIndex** (thesis §6.4):
   1. The leader must have committed an entry in its current term (the no-op)
   2. Record `readIndex = commitIndex`
   3. Confirm leadership with one heartbeat round acked by a majority
   4. Wait until `lastApplied >= readIndex`, then serve the read locally
-- [ ] Batch concurrent reads so they share one heartbeat round
-- [ ] **Lease reads** (only with `--read-mode=lease`): the leader serves reads locally if `now < lastMajorityAck + electionTimeoutMin - margin`, measured on **its own `Clock`**
-- [ ] Server flag `--read-mode=log|readindex|lease`
+- [x] Batch concurrent reads so they share one heartbeat round
+- [x] **Lease reads** (only with `--read-mode=lease`): the leader serves reads locally if `now < lastMajorityAck + electionTimeoutMin - margin`, measured on **its own `Clock`**
+- [x] Server flag `--read-mode=log|readindex|lease`
 
 **Mutation check 🔨:**
 - Skip step 3. A partitioned old leader serves stale reads. (The Phase 10 checker must catch this.)
 
 **Tests:**
-- [ ] `TestReadIndexBasic`
-- [ ] `TestReadIndexPartitionedLeader`: an isolated old leader cannot serve reads
-- [ ] `TestLeaseReadSkew`: with a slow-drift `SkewedClock` on the leader, a lease read **can** return stale data. This test should **show** the violation
+- [x] `TestReadIndexBasic`
+- [x] `TestReadIndexPartitionedLeader`: an isolated old leader cannot serve reads
+- [x] `TestLeaseReadSkew`: with a slow-drift `SkewedClock` on the leader, a lease read **can** return stale data. This test should **show** the violation
 
 **Exit:**
-- [ ] ReadIndex tests pass 200×
-- [ ] The lease skew test reliably produces a stale read
+- [x] ReadIndex tests pass 200×
+- [x] The lease skew test reliably produces a stale read
 
 
 ---

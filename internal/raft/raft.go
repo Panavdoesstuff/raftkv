@@ -80,6 +80,13 @@ type Raft struct {
 	matchIndex       map[NodeID]uint64 // leader only
 	snapSending      map[NodeID]bool   // leader only: an InstallSnapshot to this peer is in flight
 
+	// Read confirmation (readindex.go, lease.go); leader only, reset on taking office.
+	sendSeq     uint64               // number of heartbeat broadcasts this term
+	ackSeq      map[NodeID]uint64    // highest broadcast number each peer has acked
+	ackSent     map[NodeID]time.Time // Clock time the newest acked request was sent, per peer
+	readWaiters []*readWaiter        // reads awaiting a majority-acked round
+	appliedCh   chan struct{}        // closed (and replaced) whenever lastApplied moves
+
 	applyCh   chan ApplyMsg
 	applyWake chan struct{} // capacity 1: "commitIndex moved"
 }
@@ -97,6 +104,7 @@ func New(cfg Config) *Raft {
 		rng:       rand.New(rand.NewSource(cfg.Seed)),
 		applyCh:   make(chan ApplyMsg, 256),
 		applyWake: make(chan struct{}, 1),
+		appliedCh: make(chan struct{}),
 	}
 	for _, p := range cfg.Peers {
 		if p != cfg.ID {
@@ -180,6 +188,7 @@ func (r *Raft) Status() Status {
 		CommitIndex: r.commitIndex, LastApplied: r.lastApplied, LastIndex: r.lastIndex(),
 		SnapIndex: r.snapIndex,
 		Leader:    r.leaderID,
+		Rounds:    r.sendSeq, PendingReads: len(r.readWaiters),
 	}
 }
 
@@ -430,6 +439,7 @@ func (r *Raft) applier() {
 				}
 				r.mu.Lock()
 				r.lastApplied = snap.LastIncludedIndex
+				r.signalApplied()
 				r.mu.Unlock()
 				continue
 			}
@@ -461,6 +471,7 @@ func (r *Raft) applier() {
 					break
 				}
 				r.lastApplied = e.Index
+				r.signalApplied()
 				r.mu.Unlock()
 			}
 		}
@@ -492,6 +503,7 @@ func (r *Raft) stepDown(term uint64) {
 	r.role = Follower
 	if wasLeader {
 		r.resetElectionTimer()
+		r.failReads(ErrNotLeader) // their leadership was never confirmed
 	}
 	r.dbg("step down")
 }

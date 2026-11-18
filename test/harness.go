@@ -72,6 +72,7 @@ type Cluster struct {
 	ids     []raft.NodeID
 	members map[raft.NodeID]*member
 	newSM   func() raft.StateMachine
+	nodeClk func(id raft.NodeID, base clock.Clock) clock.Clock
 
 	amu       sync.Mutex
 	committed map[uint64]raft.Entry // first entry any node applied at each index
@@ -83,6 +84,13 @@ type Option func(*Cluster)
 // it itself while waiting in CheckOneLeader and friends.
 func WithFakeClock() Option {
 	return func(c *Cluster) { f := clock.NewFake(); c.fake, c.Clock = f, f }
+}
+
+// WithNodeClock gives each node its own view of the cluster clock (e.g. a
+// clock.SkewedClock over the shared FakeClock). Memnet delays and the harness
+// itself keep using the base clock.
+func WithNodeClock(f func(id raft.NodeID, base clock.Clock) clock.Clock) Option {
+	return func(c *Cluster) { c.nodeClk = f }
 }
 
 // WithStateMachine sets the per-node state machine constructor.
@@ -128,10 +136,14 @@ func StartCluster(t testing.TB, n int, seed int64, f Factory, opts ...Option) *C
 
 func (c *Cluster) boot(id raft.NodeID) {
 	m := c.members[id]
+	clk := c.Clock
+	if c.nodeClk != nil {
+		clk = c.nodeClk(id, c.Clock)
+	}
 	m.node = c.factory(Config{
 		ID: id, Peers: c.ids,
 		Transport: c.Net.Transport(id),
-		Clock:     c.Clock,
+		Clock:     clk,
 		Storage:   m.storage, // the "disk" survives crashes
 		SM:        c.newSM(), // memory does not
 		Seed:      c.Seed*1000 + int64(len(id)) + int64(id[len(id)-1]),

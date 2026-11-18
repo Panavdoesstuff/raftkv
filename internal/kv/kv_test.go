@@ -50,6 +50,13 @@ func newKVCluster(t *testing.T, n int) *kvCluster {
 // (maxLog <= 0 disables snapshots).
 func newKVClusterSnap(t *testing.T, n int, maxLog int) *kvCluster {
 	t.Helper()
+	return newKVClusterWith(t, n, maxLog, nil, nil)
+}
+
+// newKVClusterWith adds server options (read mode) and harness options (per
+// node clocks) to newKVClusterSnap.
+func newKVClusterWith(t *testing.T, n int, maxLog int, sopts []kv.ServerOption, copts []test.Option) *kvCluster {
+	t.Helper()
 	seed := seedFor(t)
 	kc := &kvCluster{
 		seed:    seed,
@@ -63,14 +70,14 @@ func newKVClusterSnap(t *testing.T, n int, maxLog int) *kvCluster {
 			ID: c.ID, Peers: c.Peers, Transport: c.Transport, Clock: c.Clock,
 			Storage: c.Storage, SM: c.SM, Seed: c.Seed,
 		})
-		srv := kv.NewServer(r, c.SM.(*kv.Store), c.Clock, kv.WithMaxLogBytes(maxLog))
+		srv := kv.NewServer(r, c.SM.(*kv.Store), c.Clock, append([]kv.ServerOption{kv.WithMaxLogBytes(maxLog)}, sopts...)...)
 		kc.mu.Lock()
 		kc.servers[c.ID] = srv
 		kc.mu.Unlock()
 		return &kvNode{Raft: r, srv: srv}
 	}
-	kc.Cluster = test.StartCluster(t, n, seed, factory, test.WithFakeClock(),
-		test.WithStateMachine(func() raft.StateMachine { return kv.NewStore() }))
+	kc.Cluster = test.StartCluster(t, n, seed, factory, append([]test.Option{test.WithFakeClock(),
+		test.WithStateMachine(func() raft.StateMachine { return kv.NewStore() })}, copts...)...)
 	return kc
 }
 

@@ -1,6 +1,9 @@
 package raft
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // maxBatch caps the entries in one AppendEntries.
 const maxBatch = 256
@@ -10,6 +13,7 @@ const maxBatch = 256
 // Caller holds mu. A new RPC goes out even if an earlier one is still in
 // flight; replies are therefore handled idempotently (see replicateTo).
 func (r *Raft) broadcastHeartbeats() {
+	r.sendSeq++
 	r.nextHeartbeat = r.clk.Now().Add(heartbeatInterval)
 	for _, p := range r.peers {
 		r.sendAppend(p)
@@ -24,6 +28,7 @@ func (r *Raft) sendAppend(p NodeID) {
 		r.sendSnapshot(p)
 		return
 	}
+	seq, sentAt := r.sendSeq, r.clk.Now() // tags for read confirmation and leases
 	a := &AppendEntriesArgs{
 		Term: r.term, LeaderID: r.id,
 		PrevLogIndex: next - 1, PrevLogTerm: r.termAt(next - 1),
@@ -31,10 +36,10 @@ func (r *Raft) sendAppend(p NodeID) {
 		LeaderCommit: r.commitIndex,
 	}
 	r.wg.Add(1)
-	go r.replicateTo(p, a)
+	go r.replicateTo(p, a, seq, sentAt)
 }
 
-func (r *Raft) replicateTo(p NodeID, a *AppendEntriesArgs) {
+func (r *Raft) replicateTo(p NodeID, a *AppendEntriesArgs, seq uint64, sentAt time.Time) {
 	defer r.wg.Done()
 	reply, err := r.tr.Peer(p).AppendEntries(r.ctx, a) // no lock held
 	if err != nil {
@@ -54,6 +59,9 @@ func (r *Raft) replicateTo(p NodeID, a *AppendEntriesArgs) {
 	if r.role != Leader || r.term != a.Term {
 		return
 	}
+	// Success or not, a reply in our term means the follower accepted us as
+	// leader: that confirms leadership for reads and extends the lease.
+	r.recordAck(p, seq, sentAt)
 	if reply.Success {
 		// matchIndex only moves forward, so a stale reply is harmless.
 		if m := a.PrevLogIndex + uint64(len(a.Entries)); m > r.matchIndex[p] {
@@ -95,6 +103,10 @@ func (r *Raft) initLeaderState() {
 	r.nextIndex = map[NodeID]uint64{}
 	r.matchIndex = map[NodeID]uint64{}
 	r.snapSending = map[NodeID]bool{}
+	r.sendSeq = 0
+	r.ackSeq = map[NodeID]uint64{}
+	r.ackSent = map[NodeID]time.Time{}
+	r.readWaiters = nil
 	for _, p := range r.peers {
 		r.nextIndex[p] = r.lastIndex() + 1
 	}
@@ -237,16 +249,17 @@ func (r *Raft) sendSnapshot(p NodeID) {
 		return
 	}
 	r.snapSending[p] = true
+	seq, sentAt := r.sendSeq, r.clk.Now()
 	a := &InstallSnapshotArgs{
 		Term: r.term, LeaderID: r.id,
 		LastIncludedIndex: r.snapIndex, LastIncludedTerm: r.snapTerm,
 		Data: r.snapData, // immutable once set; transports copy what they need
 	}
 	r.wg.Add(1)
-	go r.installTo(p, a)
+	go r.installTo(p, a, seq, sentAt)
 }
 
-func (r *Raft) installTo(p NodeID, a *InstallSnapshotArgs) {
+func (r *Raft) installTo(p NodeID, a *InstallSnapshotArgs, seq uint64, sentAt time.Time) {
 	defer r.wg.Done()
 	reply, err := r.tr.Peer(p).InstallSnapshot(r.ctx, a) // no lock held
 	r.mu.Lock()
@@ -262,6 +275,7 @@ func (r *Raft) installTo(p NodeID, a *InstallSnapshotArgs) {
 	if r.role != Leader || r.term != a.Term {
 		return
 	}
+	r.recordAck(p, seq, sentAt)
 	// The follower now holds everything through LastIncludedIndex (it either
 	// installed the snapshot or already had that much committed).
 	if a.LastIncludedIndex > r.matchIndex[p] {
