@@ -14,7 +14,14 @@ import (
 type Proposer interface {
 	Propose(cmd []byte) (index, term uint64, isLeader bool)
 	Status() raft.Status
+	// LogSize is the bytes of log held after the snapshot; Snapshot compacts
+	// the log through index using the state machine image data.
+	LogSize() int
+	Snapshot(index uint64, data []byte)
 }
+
+// DefaultMaxLogBytes is the log size above which the server snapshots.
+const DefaultMaxLogBytes = 1 << 20
 
 const (
 	// requestTimeout bounds how long the server waits for an index to apply.
@@ -36,14 +43,41 @@ type Server struct {
 	store *Store
 	clk   clock.Clock
 
+	maxLogBytes int // snapshot when the Raft log passes this; <= 0 disables
+
 	mu      sync.Mutex
 	waiters map[uint64]chan applied // log index -> request waiting on it
 }
 
-func NewServer(rf Proposer, st *Store, clk clock.Clock) *Server {
-	s := &Server{rf: rf, store: st, clk: clk, waiters: map[uint64]chan applied{}}
+// ServerOption configures a Server.
+type ServerOption func(*Server)
+
+// WithMaxLogBytes sets the log size that triggers a snapshot (<= 0: never).
+func WithMaxLogBytes(n int) ServerOption { return func(s *Server) { s.maxLogBytes = n } }
+
+func NewServer(rf Proposer, st *Store, clk clock.Clock, opts ...ServerOption) *Server {
+	s := &Server{rf: rf, store: st, clk: clk, maxLogBytes: DefaultMaxLogBytes, waiters: map[uint64]chan applied{}}
+	for _, o := range opts {
+		o(s)
+	}
 	st.onApply = s.deliver
+	st.onRestore = s.failWaiters
 	return s
+}
+
+// failWaiters answers every waiting request ErrWrongLeader. It runs when a
+// snapshot replaces the state: waiters on indexes the snapshot jumped over
+// would otherwise never be woken (the entries are never applied here), and any
+// waiter at all belongs to a leadership that just ended, since only a newer
+// leader sends us a snapshot. The client retries; dedup makes that safe.
+func (s *Server) failWaiters() {
+	s.mu.Lock()
+	ws := s.waiters
+	s.waiters = map[uint64]chan applied{}
+	s.mu.Unlock()
+	for _, ch := range ws {
+		ch <- applied{term: 0} // buffered (cap 1); term 0 never matches a proposal
+	}
 }
 
 func (s *Server) Store() *Store { return s.store }
@@ -59,6 +93,21 @@ func (s *Server) deliver(index, term uint64, rep *kvpb.CommandReply) {
 	if ok {
 		ch <- applied{term, rep} // buffered (cap 1), never blocks
 	}
+	s.maybeSnapshot(index)
+}
+
+// maybeSnapshot compacts the Raft log once it passes maxLogBytes. It runs from
+// the apply hook, on Raft's applier goroutine with no lock held, so the store
+// is at exactly index: its image is the right one to pair with that index.
+func (s *Server) maybeSnapshot(index uint64) {
+	if s.maxLogBytes <= 0 || s.rf.LogSize() <= s.maxLogBytes {
+		return
+	}
+	data, err := s.store.Snapshot()
+	if err != nil {
+		return // can't happen for gob of plain maps; try again at the next apply
+	}
+	s.rf.Snapshot(index, data)
 }
 
 // Command runs one request through the log. Every op, including Get, is

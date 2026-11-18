@@ -146,11 +146,21 @@ type StateMachine interface {
 	Restore(data []byte) error
 }
 
-// ApplyMsg is delivered on ApplyCh for each committed entry, in order, once.
+// ApplyMsg is delivered on ApplyCh in apply order, once each. Normally it
+// carries a committed Entry. When the state machine has just been replaced by
+// a snapshot (an installed one, or the one loaded at start-up), Snapshot is set
+// instead: the state machine now reflects every entry through
+// Snapshot.LastIncludedIndex, and the next message is the entry after it.
+// Entry and Result are zero in that case.
 type ApplyMsg struct {
-	Entry  Entry
-	Result []byte
+	Entry    Entry
+	Result   []byte
+	Snapshot *Snapshot
 }
+
+// entrySize is the accounting size of an entry for LogSize: a fixed header
+// (index, term, type) plus the payload.
+func entrySize(e Entry) int { return 24 + len(e.Data) }
 
 type Role uint8
 
@@ -180,5 +190,6 @@ type Status struct {
 	CommitIndex uint64
 	LastApplied uint64
 	LastIndex   uint64
+	SnapIndex   uint64 // last index covered by the snapshot (0 if none)
 	Leader      NodeID // who this node believes leads ("" if unknown); a client hint only
 }

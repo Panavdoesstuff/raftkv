@@ -159,6 +159,18 @@ func (c *Cluster) drain(m *member, ch <-chan raft.ApplyMsg, done chan<- struct{}
 	defer close(done)
 	var last uint64
 	for msg := range ch {
+		if sn := msg.Snapshot; sn != nil {
+			// The state machine jumped to a snapshot: it now reflects every
+			// entry through LastIncludedIndex. That must be forward progress
+			// (never a rollback); the next entry must be the one after it.
+			c.amu.Lock()
+			if sn.LastIncludedIndex <= last {
+				c.t.Errorf("%s installed snapshot %d after applying %d (state machine rolled back)", m.id, sn.LastIncludedIndex, last)
+			}
+			last = sn.LastIncludedIndex
+			c.amu.Unlock()
+			continue
+		}
 		e := msg.Entry
 		c.amu.Lock()
 		if e.Index != last+1 {

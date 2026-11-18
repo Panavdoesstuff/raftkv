@@ -51,7 +51,7 @@ A follower truncates only from the first entry that **conflicts** (same index, d
 | Log entries | Acking AppendEntries; the leader counting its own copy toward commit | A follower acks, crashes and forgets, so a "committed" entry is on fewer than a majority. A later leader without it overwrites it: committed data lost. `TestFigure8Unreliable`, `TestPersistChurn`. |
 | Log truncation | Appending the replacement entries | A restart resurrects entries the leader had overwritten, on the same indexes as the new ones. |
 
-**Not persisted:** `commitIndex`, `lastApplied`, `nextIndex`, `matchIndex`, role. A restarted node comes back as a follower with `commitIndex = 0` and re-learns it from the leader; the state machine is rebuilt by replaying the log (or snapshot, from Phase 5).
+**Not persisted:** `commitIndex`, `lastApplied`, `nextIndex`, `matchIndex`, role. A restarted node comes back as a follower with `commitIndex = 0` and re-learns it from the leader; the state machine is rebuilt from the snapshot, then the log.
 
 **`TestPersistBeforeReply`** reads the disk the moment each RPC returns, so a missing persist fails whichever path skipped it.
 
@@ -99,3 +99,52 @@ A leader in a minority can accept a proposal but never commits it, so its server
 The server proposes at index *i* in term *t* and waits. If it is partitioned, a new leader may commit a different entry at *i*, and after the heal the old leader applies that entry at *i*. Index alone can't tell the waiter its own request from the replacement, so the waiter compares the applied entry's **term** with the one it proposed in, and answers `ErrWrongLeader` on a mismatch ([server.go](../internal/kv/server.go)). The 50 ms "still leader of my term?" check usually catches this first, but it is a poll, so the term check is what makes it deterministic.
 
 `TestKVLostLeadershipNoFalseSuccess`: the old leader takes two Puts at N and N+1, is partitioned, the majority puts its own no-op at N and its own Put at N+1, then the partition heals. (The new leader's no-op never reaches `Apply`, so only the Put at N+1 exercises the check.) Mutation: removing the term check makes the Put at N+1 return success; 10 or more of 20 runs fail.
+
+## Phase 5 — Snapshots
+
+### How a snapshot is taken
+
+The KV server owns the policy, Raft owns the log.
+
+1. `Server.deliver` runs from the Store's apply hook, on Raft's applier goroutine, right after entry *i* is applied. The store is at exactly *i*, so its image pairs with *i* ([server.go](../internal/kv/server.go), `maybeSnapshot`).
+2. If `Raft.LogSize()` is over `maxLogBytes` (`kv.WithMaxLogBytes`, default 1 MiB, tests use 1–4 KiB), it gob-encodes the store **and the dedup table** (plus a `Config` field, the Phase 7 hook) and calls `Raft.Snapshot(i, data)`.
+3. Raft saves the snapshot (`Storage.SaveSnapshot`: temp file, fsync, rename, directory fsync), then drops the covered entries in memory (`compactTo`). A crash leaves the old or the new snapshot, never half of one. `Snapshot` ignores an index that is already covered, uncommitted, or more than one past `lastApplied`.
+
+| Rule | Why |
+|---|---|
+| Snapshot only committed entries | An uncommitted entry can still be replaced. |
+| Image must match the index exactly | Taken inside `Apply`, so no entry can slip in between. |
+| Durable before the log shrinks | Otherwise a crash loses both the entries and the state they made. |
+
+### The index helper
+
+All snapshot-offset arithmetic lives in the helper block of [raft.go](../internal/raft/raft.go): `lastIndex`, `lastTerm`, `termAt`, `entriesFrom`, `truncateFrom`, `compactTo`. Nothing else indexes `entries` with an absolute index. `termAt(snapIndex)` returns the snapshot's term, which is what makes `prevLogIndex == lastIncludedIndex` work in AppendEntries. `logBytes` is kept in step by the same few sites. Test: `TestRaftSnapshotAPI`, `TestInstallSnapshotKeepsMatchingSuffix`.
+
+### InstallSnapshot
+
+The leader sends it instead of AppendEntries when `nextIndex[p] <= snapIndex` (`sendAppend` in [replication.go](../internal/raft/replication.go)). At most one is in flight per peer. The whole snapshot goes in one RPC; chunking is not needed in-process.
+
+Follower rules (`InstallSnapshot`):
+
+| Case | Action | Test |
+|---|---|---|
+| Older term | Reject, reply with our term | `TestInstallSnapshotStale` |
+| `lastIncludedIndex <= commitIndex` | Ignore. Installing it would roll the state machine back | `TestInstallSnapshotStale` |
+| We hold an entry at that index with that term | Keep the log after it | `TestInstallSnapshotKeepsMatchingSuffix` |
+| Otherwise | Discard the whole log | `TestInstallSnapshotDiscardsConflictingLog` |
+
+In the discard case the entries after the snapshot index are truncated on disk **first**, then the snapshot is saved. A crash in between leaves a valid shorter log. The other order could leave a log suffix that does not belong to its prefix.
+
+Delivery to the state machine goes through the applier, never under `mu`. The follower sets `commitIndex = lastIncludedIndex` and `pendingSnap`; the applier restores the SM, sends an `ApplyMsg{Snapshot}`, then sets `lastApplied`. The applier checks `pendingSnap` before each entry, so a batch it had already copied is abandoned rather than applied after the jump. The test harness treats a snapshot message as a forward jump and still fails on any out-of-order or repeated index (`TestInstallSnapshotApplyOrder`, `TestSnapshotInstall`).
+
+**Restart** uses the same path: `Start` loads the snapshot, sets `commitIndex` to its index and `pendingSnap`, so the SM is restored before the log tail is replayed (`TestSnapshotRestart`).
+
+**Stale waiters:** a request waiting on an index the snapshot jumps over would never be woken. `Store.Restore` calls `Server.failWaiters`, which answers every waiter `ErrWrongLeader` (`TestKVRestoreFailsWaiters`). Only a newer leader sends a snapshot, so those requests were already lost.
+
+### Why the dedup table is in the snapshot
+
+Dedup lives in the state machine, so it is rebuilt by replaying the log. Once the log is compacted, the entries that built the table are gone. A snapshot without it forgets every client's last `(seq, result)`, and a retry of a request applied before the snapshot is executed a second time: an Append is duplicated. The tests: `TestKVSnapshotKeepsDedup` (store level) and `TestSnapshotChurn` (60 s of crashes, partitions and snapshots with 10% lost replies; every token exactly once, on every replica). Mutation: encoding the snapshot with a nil dedup table fails both.
+
+### Other tests
+
+`TestSnapshotBoundedLog` (Raft and KV level), `TestSnapshotInstall` (node offline for 10k entries), `TestSnapshotRestart`, the raft-level `TestSnapshotChurn`, and storage tests for torn or damaged snapshot files (`TestFileSnapshotTmpLeftoverIgnored`, `TestFileSnapshotCorruptIsError`, `TestFileSnapshotOlderIgnored`).

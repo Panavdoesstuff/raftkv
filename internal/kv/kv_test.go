@@ -43,6 +43,13 @@ type kvCluster struct {
 
 func newKVCluster(t *testing.T, n int) *kvCluster {
 	t.Helper()
+	return newKVClusterSnap(t, n, kv.DefaultMaxLogBytes)
+}
+
+// newKVClusterSnap is newKVCluster with an explicit snapshot threshold
+// (maxLog <= 0 disables snapshots).
+func newKVClusterSnap(t *testing.T, n int, maxLog int) *kvCluster {
+	t.Helper()
 	seed := seedFor(t)
 	kc := &kvCluster{
 		seed:    seed,
@@ -56,7 +63,7 @@ func newKVCluster(t *testing.T, n int) *kvCluster {
 			ID: c.ID, Peers: c.Peers, Transport: c.Transport, Clock: c.Clock,
 			Storage: c.Storage, SM: c.SM, Seed: c.Seed,
 		})
-		srv := kv.NewServer(r, c.SM.(*kv.Store), c.Clock)
+		srv := kv.NewServer(r, c.SM.(*kv.Store), c.Clock, kv.WithMaxLogBytes(maxLog))
 		kc.mu.Lock()
 		kc.servers[c.ID] = srv
 		kc.mu.Unlock()

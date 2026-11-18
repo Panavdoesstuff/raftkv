@@ -266,3 +266,76 @@ func flipByte(t *testing.T, path string, off int64) {
 		t.Fatal(err)
 	}
 }
+
+// A leftover snapshot.tmp (crash during the atomic replace) must never be
+// read: the previous snapshot stays intact.
+func TestFileSnapshotTmpLeftoverIgnored(t *testing.T) {
+	dir := t.TempDir()
+	s := openT(t, dir)
+	must(t, s.Append(ents(1, 1, 5)))
+	must(t, s.SaveSnapshot(raft.Snapshot{LastIncludedIndex: 3, LastIncludedTerm: 1, Data: []byte("good")}))
+	must(t, s.Close())
+	must(t, os.WriteFile(filepath.Join(dir, SnapshotFile+".tmp"), []byte("half-written garbage"), 0o644))
+
+	s2 := openT(t, dir)
+	_, log, snap, err := s2.Load()
+	if err != nil || snap == nil || string(snap.Data) != "good" || snap.LastIncludedIndex != 3 {
+		t.Fatalf("snap=%+v err=%v", snap, err)
+	}
+	sameEntries(t, log, ents(1, 4, 5))
+	if _, err := os.Stat(filepath.Join(dir, SnapshotFile+".tmp")); !os.IsNotExist(err) {
+		t.Fatalf("tmp file not cleaned up: %v", err)
+	}
+}
+
+// Damage to the snapshot file (it is whole or absent, so this is not a torn
+// write) is an error, never a silently empty state machine.
+func TestFileSnapshotCorruptIsError(t *testing.T) {
+	dir := t.TempDir()
+	s := openT(t, dir)
+	must(t, s.SaveSnapshot(raft.Snapshot{LastIncludedIndex: 3, LastIncludedTerm: 1, Data: []byte("state-bytes")}))
+	must(t, s.Close())
+	p := filepath.Join(dir, SnapshotFile)
+	b, err := os.ReadFile(p)
+	must(t, err)
+	for name, mut := range map[string][]byte{
+		"flipped byte": append(append([]byte(nil), b[:len(b)-1]...), b[len(b)-1]^0xff),
+		"truncated":    b[:len(b)-3],
+		"empty":        {},
+	} {
+		must(t, os.WriteFile(p, mut, 0o644))
+		if _, err := OpenFile(dir); err == nil {
+			t.Fatalf("%s: OpenFile accepted a damaged snapshot", name)
+		}
+	}
+}
+
+func TestFileSnapshotOlderIgnored(t *testing.T) {
+	dir := t.TempDir()
+	s := openT(t, dir)
+	must(t, s.Append(ents(1, 1, 8)))
+	must(t, s.SaveSnapshot(raft.Snapshot{LastIncludedIndex: 6, LastIncludedTerm: 1, Data: []byte("new")}))
+	must(t, s.SaveSnapshot(raft.Snapshot{LastIncludedIndex: 3, LastIncludedTerm: 1, Data: []byte("old")}))
+	must(t, s.Close())
+	_, log, snap, _ := openT(t, dir).Load()
+	if snap.LastIncludedIndex != 6 || string(snap.Data) != "new" {
+		t.Fatalf("older snapshot replaced newer: %+v", snap)
+	}
+	sameEntries(t, log, ents(1, 7, 8))
+}
+
+// Entries appended after a snapshot that covers the whole log continue from
+// the snapshot boundary and survive a restart.
+func TestFileSnapshotThenAppendAfterRestart(t *testing.T) {
+	dir := t.TempDir()
+	s := openT(t, dir)
+	must(t, s.Append(ents(1, 1, 4)))
+	must(t, s.SaveSnapshot(raft.Snapshot{LastIncludedIndex: 4, LastIncludedTerm: 1, Data: []byte("s")}))
+	must(t, s.Append(ents(2, 5, 6)))
+	must(t, s.Close())
+	_, log, snap, err := openT(t, dir).Load()
+	if err != nil || snap.LastIncludedIndex != 4 {
+		t.Fatalf("snap=%+v err=%v", snap, err)
+	}
+	sameEntries(t, log, ents(2, 5, 6))
+}

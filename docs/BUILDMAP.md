@@ -297,24 +297,24 @@ Each phase has:
 ### Phase 5 — Snapshots (Days 9–10)
 
 **Build:**
-- [ ] The KV server snapshots its **store, dedup table and current config** once the log passes `maxLogBytes`
-- [ ] Raft discards entries covered by the snapshot and keeps `lastIncludedIndex` and `lastIncludedTerm`
-- [ ] All index arithmetic is offset by `lastIncludedIndex`, through one helper. No raw slice indexing
-- [ ] `InstallSnapshot` for followers that are behind the leader's snapshot
-- [ ] Snapshots are written atomically (temp file, fsync, rename)
+- [x] The KV server snapshots its **store, dedup table and current config** once the log passes `maxLogBytes`
+- [x] Raft discards entries covered by the snapshot and keeps `lastIncludedIndex` and `lastIncludedTerm`
+- [x] All index arithmetic is offset by `lastIncludedIndex`, through one helper. No raw slice indexing
+- [x] `InstallSnapshot` for followers that are behind the leader's snapshot
+- [x] Snapshots are written atomically (temp file, fsync, rename)
 
 **Mutation check 🔨:**
 - Leave the dedup table out of the snapshot. After a restart, retried appends are duplicated.
 
 **Tests:**
-- [ ] `TestSnapshotBoundedLog`: log size stays under the limit under continuous load
-- [ ] `TestSnapshotInstall`: a node offline for 10k entries catches up
-- [ ] `TestSnapshotRestart`: restart from snapshot plus log tail
-- [ ] `TestSnapshotChurn`: crashes + partitions + snapshots for 60 s
-- [ ] All earlier tests still pass
+- [x] `TestSnapshotBoundedLog`: log size stays under the limit under continuous load
+- [x] `TestSnapshotInstall`: a node offline for 10k entries catches up
+- [x] `TestSnapshotRestart`: restart from snapshot plus log tail
+- [x] `TestSnapshotChurn`: crashes + partitions + snapshots for 60 s
+- [x] All earlier tests still pass
 
 **Exit:**
-- [ ] All tests pass 200×
+- [x] All tests pass 200×
 
 
 ---

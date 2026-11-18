@@ -19,6 +19,11 @@ func (r *Raft) broadcastHeartbeats() {
 // sendAppend builds and launches one AppendEntries for p. Caller holds mu.
 func (r *Raft) sendAppend(p NodeID) {
 	next := r.nextIndex[p]
+	if next <= r.snapIndex {
+		// The entries p needs are gone (compacted): ship the snapshot instead.
+		r.sendSnapshot(p)
+		return
+	}
 	a := &AppendEntriesArgs{
 		Term: r.term, LeaderID: r.id,
 		PrevLogIndex: next - 1, PrevLogTerm: r.termAt(next - 1),
@@ -89,6 +94,7 @@ func (r *Raft) replicateTo(p NodeID, a *AppendEntriesArgs) {
 func (r *Raft) initLeaderState() {
 	r.nextIndex = map[NodeID]uint64{}
 	r.matchIndex = map[NodeID]uint64{}
+	r.snapSending = map[NodeID]bool{}
 	for _, p := range r.peers {
 		r.nextIndex[p] = r.lastIndex() + 1
 	}
@@ -141,6 +147,7 @@ func (r *Raft) Propose(cmd []byte) (index, term uint64, isLeader bool) {
 func (r *Raft) appendLocal(e Entry) uint64 {
 	e.Index = r.lastIndex() + 1
 	r.entries = append(r.entries, e)
+	r.logBytes += entrySize(e)
 	r.persistAppend([]Entry{e})
 	return e.Index
 }
@@ -198,6 +205,9 @@ func (r *Raft) AppendEntries(_ context.Context, a *AppendEntriesArgs) (*AppendEn
 		}
 		added := CloneEntries(a.Entries[i:])
 		r.entries = append(r.entries, added...)
+		for _, e := range added {
+			r.logBytes += entrySize(e)
+		}
 		if err := r.persistAppend(added); err != nil { // durable before we ack
 			return nil, err
 		}
@@ -219,12 +229,110 @@ func (r *Raft) AppendEntries(_ context.Context, a *AppendEntriesArgs) (*AppendEn
 	return &AppendEntriesReply{Term: r.term, Success: true}, nil
 }
 
-// InstallSnapshot arrives in Phase 5.
+// sendSnapshot launches an InstallSnapshot to p unless one is already in
+// flight (heartbeats would otherwise pile up copies of a large snapshot).
+// Caller holds mu.
+func (r *Raft) sendSnapshot(p NodeID) {
+	if r.snapSending[p] {
+		return
+	}
+	r.snapSending[p] = true
+	a := &InstallSnapshotArgs{
+		Term: r.term, LeaderID: r.id,
+		LastIncludedIndex: r.snapIndex, LastIncludedTerm: r.snapTerm,
+		Data: r.snapData, // immutable once set; transports copy what they need
+	}
+	r.wg.Add(1)
+	go r.installTo(p, a)
+}
+
+func (r *Raft) installTo(p NodeID, a *InstallSnapshotArgs) {
+	defer r.wg.Done()
+	reply, err := r.tr.Peer(p).InstallSnapshot(r.ctx, a) // no lock held
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.snapSending, p)
+	if err != nil || r.stopped {
+		return
+	}
+	if reply.Term > r.term {
+		r.stepDown(reply.Term)
+		return
+	}
+	if r.role != Leader || r.term != a.Term {
+		return
+	}
+	// The follower now holds everything through LastIncludedIndex (it either
+	// installed the snapshot or already had that much committed).
+	if a.LastIncludedIndex > r.matchIndex[p] {
+		r.matchIndex[p] = a.LastIncludedIndex
+	}
+	if r.matchIndex[p]+1 > r.nextIndex[p] {
+		r.nextIndex[p] = r.matchIndex[p] + 1
+	}
+	r.advanceCommit()
+	if r.nextIndex[p] <= r.lastIndex() {
+		r.sendAppend(p)
+	}
+}
+
+// InstallSnapshot is the receiver side (Figure 13 of the paper, sent whole
+// rather than in chunks). Rules:
+//   - older term: reject. Otherwise it is from the current leader, so reset
+//     the election timer like AppendEntries does.
+//   - a snapshot at or below our commitIndex tells us nothing new: ignore it
+//     (installing it would roll the state machine back).
+//   - if we hold an entry at LastIncludedIndex with LastIncludedTerm, the log
+//     after it is consistent with the leader's: keep it. Otherwise discard the
+//     whole log.
+//   - persist before replying, then let the applier restore the state machine.
+//     lastApplied only moves when the applier has done so, which keeps the
+//     apply stream ordered and exactly-once across the jump.
 func (r *Raft) InstallSnapshot(_ context.Context, a *InstallSnapshotArgs) (*InstallSnapshotReply, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.stopped {
 		return nil, ErrStopped
 	}
+	if a.Term < r.term {
+		return &InstallSnapshotReply{Term: r.term}, nil
+	}
+	if a.Term > r.term {
+		r.stepDown(a.Term)
+	} else if r.role == Candidate {
+		r.role = Follower
+	} else if r.role == Leader {
+		r.dbg("InstallSnapshot from another leader in our term", "from", a.LeaderID)
+		return &InstallSnapshotReply{Term: r.term}, nil
+	}
+	if err := r.persistHardState(); err != nil {
+		return nil, err
+	}
+	r.leaderID = a.LeaderID
+	r.resetElectionTimer()
+
+	idx := a.LastIncludedIndex
+	if idx <= r.commitIndex {
+		return &InstallSnapshotReply{Term: r.term}, nil
+	}
+	data := append([]byte(nil), a.Data...)
+	if !(idx <= r.lastIndex() && r.termAt(idx) == a.LastIncludedTerm) {
+		// Our log does not contain the snapshot's last entry: whatever follows
+		// idx is on a diverging branch. Drop it on disk first, while the
+		// entries through idx are still there, so a crash before the snapshot
+		// is saved leaves a valid (shorter) log rather than a gap or a log
+		// whose suffix does not belong to its prefix.
+		if err := r.truncateFrom(idx + 1); err != nil {
+			return nil, err
+		}
+	}
+	if err := r.cfg.Storage.SaveSnapshot(Snapshot{LastIncludedIndex: idx, LastIncludedTerm: a.LastIncludedTerm, Data: data}); err != nil {
+		return nil, r.halt(err)
+	}
+	r.compactTo(idx, a.LastIncludedTerm, data)
+	r.commitIndex = idx
+	r.pendingSnap = true
+	r.notifyApply()
+	r.dbg("snapshot installed", "index", idx)
 	return &InstallSnapshotReply{Term: r.term}, nil
 }

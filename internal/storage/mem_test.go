@@ -82,3 +82,14 @@ func TestMemLoadReturnsCopies(t *testing.T) {
 		t.Fatal("Load aliases internal state")
 	}
 }
+
+func TestMemSnapshotOlderIgnored(t *testing.T) {
+	s := NewMem()
+	s.Append(ents(1, 1, 10))
+	s.SaveSnapshot(raft.Snapshot{LastIncludedIndex: 6, LastIncludedTerm: 1, Data: []byte("new")})
+	s.SaveSnapshot(raft.Snapshot{LastIncludedIndex: 3, LastIncludedTerm: 1, Data: []byte("old")})
+	_, _, snap, _ := s.Load()
+	if snap.LastIncludedIndex != 6 || string(snap.Data) != "new" {
+		t.Fatalf("older snapshot replaced newer: %+v", snap)
+	}
+}

@@ -66,7 +66,10 @@ type Raft struct {
 	// through lastIndex/lastTerm (and, from Phase 2, entryAt) so the snapshot
 	// offset lives in one place.
 	snapIndex, snapTerm uint64
+	snapData            []byte // the snapshot's state-machine image; never mutated, so safe to share
 	entries             []Entry
+	logBytes            int  // sum of entrySize over entries, kept in step by every site that changes them
+	pendingSnap         bool // the state machine must be restored from snapData before applying more
 
 	commitIndex, lastApplied uint64
 
@@ -75,6 +78,7 @@ type Raft struct {
 	votes            int
 	nextIndex        map[NodeID]uint64 // leader only
 	matchIndex       map[NodeID]uint64 // leader only
+	snapSending      map[NodeID]bool   // leader only: an InstallSnapshot to this peer is in flight
 
 	applyCh   chan ApplyMsg
 	applyWake chan struct{} // capacity 1: "commitIndex moved"
@@ -121,11 +125,18 @@ func (r *Raft) Start() error {
 	r.started = true
 	r.term, r.votedFor = hs.Term, hs.VotedFor
 	r.savedHS = hs
-	if snap != nil {
-		r.snapIndex, r.snapTerm = snap.LastIncludedIndex, snap.LastIncludedTerm
-		r.commitIndex, r.lastApplied = snap.LastIncludedIndex, snap.LastIncludedIndex
-	}
 	r.entries = entries
+	for _, e := range entries {
+		r.logBytes += entrySize(e)
+	}
+	if snap != nil {
+		// The state machine starts empty. The applier restores it from the
+		// snapshot before it applies anything from the log tail, and tells
+		// the consumer with a snapshot ApplyMsg.
+		r.snapIndex, r.snapTerm, r.snapData = snap.LastIncludedIndex, snap.LastIncludedTerm, snap.Data
+		r.commitIndex = snap.LastIncludedIndex
+		r.pendingSnap = true
+	}
 	r.role = Follower
 	r.resetElectionTimer()
 
@@ -167,7 +178,8 @@ func (r *Raft) Status() Status {
 	return Status{
 		ID: r.id, Role: r.role, Term: r.term,
 		CommitIndex: r.commitIndex, LastApplied: r.lastApplied, LastIndex: r.lastIndex(),
-		Leader: r.leaderID,
+		SnapIndex: r.snapIndex,
+		Leader:    r.leaderID,
 	}
 }
 
@@ -217,14 +229,75 @@ func (r *Raft) entriesFrom(i uint64, max int) []Entry {
 // truncateFrom deletes every entry with index >= i, in memory and on disk.
 // Caller holds mu.
 func (r *Raft) truncateFrom(i uint64) error {
-	if i <= r.snapIndex {
+	if i <= r.snapIndex || i > r.lastIndex() {
 		return nil
 	}
-	r.entries = r.entries[:i-r.snapIndex-1]
+	keep := i - r.snapIndex - 1
+	for _, e := range r.entries[keep:] {
+		r.logBytes -= entrySize(e)
+	}
+	r.entries = r.entries[:keep]
 	if err := r.cfg.Storage.TruncateFrom(i); err != nil {
 		return r.halt(err)
 	}
 	return nil
+}
+
+// compactTo discards every entry with index <= idx and makes (idx, term, data)
+// the snapshot boundary. Entries after idx are kept (copied, so the dropped
+// prefix can be freed); if idx is at or past the end of the log nothing is
+// kept. Memory only: the caller has already made the snapshot durable.
+// Caller holds mu.
+func (r *Raft) compactTo(idx, term uint64, data []byte) {
+	drop := idx - r.snapIndex
+	if drop > uint64(len(r.entries)) {
+		drop = uint64(len(r.entries))
+	}
+	kept := append([]Entry(nil), r.entries[drop:]...)
+	r.entries = kept
+	r.logBytes = 0
+	for _, e := range kept {
+		r.logBytes += entrySize(e)
+	}
+	r.snapIndex, r.snapTerm, r.snapData = idx, term, data
+}
+
+// LogSize is the size in bytes of the log entries held after the snapshot.
+// The state machine owner compares it with its limit to decide when to call
+// Snapshot.
+func (r *Raft) LogSize() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.logBytes
+}
+
+// Snapshot is called by the state machine's owner: data is the state machine
+// image after applying every entry through index. Raft makes it durable and
+// discards the log it covers. Ignored if index is already covered, not yet
+// committed (an uncommitted entry could still be replaced), or beyond what the
+// state machine has applied.
+//
+// The caller must hold no Raft lock and, to get an image that matches index
+// exactly, must call from inside the apply path (kv does it from the Store's
+// apply hook, where the state machine is at exactly that index).
+func (r *Raft) Snapshot(index uint64, data []byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// index may be at most one past lastApplied: the entry being applied right
+	// now (the caller is inside its Apply). Anything further would drop
+	// entries the state machine has not seen, and the applier would stall.
+	if r.stopped || index <= r.snapIndex || index > r.commitIndex || index > r.lastApplied+1 {
+		return
+	}
+	term := r.termAt(index)
+	data = append([]byte(nil), data...)
+	// Durable before the in-memory log shrinks (disk write under mu, see below).
+	if err := r.cfg.Storage.SaveSnapshot(Snapshot{LastIncludedIndex: index, LastIncludedTerm: term, Data: data}); err != nil {
+		r.halt(err)
+		return
+	}
+	r.compactTo(index, term, data)
+	r.dbg("snapshot taken", "index", index, "logBytes", r.logBytes)
 }
 
 // --- persistence (Figure 2, "Persistent state") ---
@@ -243,6 +316,11 @@ func (r *Raft) truncateFrom(i uint64) error {
 //     a committed entry is lost (Leader Completeness).
 //   - log truncation, before the replacement entries are appended. Without it
 //     a restart resurrects entries the leader overwrote.
+//   - the snapshot (SaveSnapshot), before the log it covers is discarded in
+//     memory and before replying to InstallSnapshot. It is written by temp
+//     file + fsync + rename, so a crash leaves the old or the new snapshot,
+//     never half of one. Without it a restart finds neither the entries nor
+//     the state they produced.
 //   - NOT persisted: commitIndex, lastApplied, nextIndex, matchIndex, role.
 //     All are rebuilt (commit is re-learned from the leader; the state
 //     machine is replayed from the log or snapshot).
@@ -331,6 +409,30 @@ func (r *Raft) applier() {
 		}
 		for {
 			r.mu.Lock()
+			if r.pendingSnap {
+				// Replace the state machine's contents before anything else
+				// is applied. Copy under mu, restore and send outside it.
+				snap := Snapshot{LastIncludedIndex: r.snapIndex, LastIncludedTerm: r.snapTerm, Data: r.snapData}
+				r.pendingSnap = false
+				r.mu.Unlock()
+				if r.cfg.SM != nil {
+					if err := r.cfg.SM.Restore(snap.Data); err != nil {
+						r.mu.Lock()
+						r.halt(fmt.Errorf("restore snapshot: %w", err))
+						r.mu.Unlock()
+						return
+					}
+				}
+				select {
+				case r.applyCh <- ApplyMsg{Snapshot: &snap}:
+				case <-r.ctx.Done():
+					return
+				}
+				r.mu.Lock()
+				r.lastApplied = snap.LastIncludedIndex
+				r.mu.Unlock()
+				continue
+			}
 			if r.lastApplied >= r.commitIndex {
 				r.mu.Unlock()
 				break
@@ -338,6 +440,12 @@ func (r *Raft) applier() {
 			batch := CloneEntries(r.entriesFrom(r.lastApplied+1, int(r.commitIndex-r.lastApplied)))
 			r.mu.Unlock()
 			for _, e := range batch {
+				r.mu.Lock()
+				stale := r.pendingSnap // a snapshot jumped past the rest of this batch
+				r.mu.Unlock()
+				if stale {
+					break
+				}
 				var res []byte
 				if e.Type == EntryNormal && r.cfg.SM != nil {
 					res = r.cfg.SM.Apply(e)
@@ -348,6 +456,10 @@ func (r *Raft) applier() {
 					return
 				}
 				r.mu.Lock()
+				if r.pendingSnap {
+					r.mu.Unlock()
+					break
+				}
 				r.lastApplied = e.Index
 				r.mu.Unlock()
 			}

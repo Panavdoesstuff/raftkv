@@ -55,6 +55,9 @@ func (m *MemStorage) TruncateFrom(index uint64) error {
 func (m *MemStorage) SaveSnapshot(s raft.Snapshot) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.snap != nil && s.LastIncludedIndex <= m.snap.LastIncludedIndex {
+		return nil // older than what we hold
+	}
 	s.Data = append([]byte(nil), s.Data...)
 	m.snap = &s
 	kept := m.log[:0:0]

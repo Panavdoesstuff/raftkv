@@ -24,6 +24,13 @@ type Store struct {
 	// onApply, if set, is told about every applied entry (the server uses it
 	// to wake the request waiting on that index). Called with mu released.
 	onApply func(index, term uint64, reply *kvpb.CommandReply)
+	// onRestore, if set, is told that the whole state was just replaced by a
+	// snapshot. Called with mu released.
+	onRestore func()
+
+	// config is the current cluster configuration, carried through snapshots
+	// verbatim. Phase 7 (membership) fills it; until then it stays nil.
+	config []byte
 }
 
 func NewStore() *Store {
@@ -106,6 +113,25 @@ func (s *Store) Peek(key string) (string, bool) {
 type snapshotV struct {
 	Data  map[string]string
 	Dedup map[string]dedupEntry
+	// Config is the cluster configuration at the snapshot point (Phase 7
+	// hook). A node restored from a snapshot cannot replay the config entries
+	// the snapshot covers, so it must learn the config from here.
+	Config []byte
+}
+
+// Config returns the configuration carried by the last Restore (or set by the
+// membership layer). Phase 7 hook.
+func (s *Store) Config() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]byte(nil), s.config...)
+}
+
+// SetConfig records the current configuration so the next Snapshot carries it.
+func (s *Store) SetConfig(c []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.config = append([]byte(nil), c...)
 }
 
 // Snapshot and Restore cover the store and the dedup table together; leaving
@@ -114,7 +140,7 @@ func (s *Store) Snapshot() ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(snapshotV{s.data, s.dedup}); err != nil {
+	if err := gob.NewEncoder(&buf).Encode(snapshotV{s.data, s.dedup, s.config}); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
@@ -126,13 +152,17 @@ func (s *Store) Restore(b []byte) error {
 		return err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.data, s.dedup = v.Data, v.Dedup
+	s.data, s.dedup, s.config = v.Data, v.Dedup, v.Config
 	if s.data == nil {
 		s.data = map[string]string{}
 	}
 	if s.dedup == nil {
 		s.dedup = map[string]dedupEntry{}
+	}
+	hook := s.onRestore
+	s.mu.Unlock()
+	if hook != nil {
+		hook()
 	}
 	return nil
 }
