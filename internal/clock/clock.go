@@ -17,6 +17,9 @@ type Timer interface {
 type Ticker interface {
 	C() <-chan time.Time
 	Stop()
+	// Reset changes the interval to d and restarts the period from now (like
+	// time.Ticker.Reset).
+	Reset(d time.Duration)
 }
 
 // Clock is the source of time for a node.

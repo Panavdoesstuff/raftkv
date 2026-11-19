@@ -17,5 +17,6 @@ func (r *realTimer) Reset(d time.Duration) bool { return r.t.Reset(d) }
 
 type realTicker struct{ t *time.Ticker }
 
-func (r *realTicker) C() <-chan time.Time { return r.t.C }
-func (r *realTicker) Stop()               { r.t.Stop() }
+func (r *realTicker) C() <-chan time.Time   { return r.t.C }
+func (r *realTicker) Stop()                 { r.t.Stop() }
+func (r *realTicker) Reset(d time.Duration) { r.t.Reset(d) }

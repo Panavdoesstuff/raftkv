@@ -129,3 +129,16 @@ type fakeTicker struct{ t *fakeTimer }
 
 func (k *fakeTicker) C() <-chan time.Time { return k.t.ch }
 func (k *fakeTicker) Stop()               { k.t.Stop() }
+
+func (k *fakeTicker) Reset(d time.Duration) {
+	if d <= 0 {
+		panic("clock: non-positive ticker interval")
+	}
+	k.t.c.mu.Lock()
+	defer k.t.c.mu.Unlock()
+	k.t.period = d
+	k.t.deadline = k.t.c.now.Add(d)
+	k.t.active = true
+	k.t.c.timers[k.t] = struct{}{}
+	k.t.c.cond.Broadcast()
+}
