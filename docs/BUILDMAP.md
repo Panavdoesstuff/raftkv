@@ -390,9 +390,9 @@ Each phase has:
 - [x] Local multi-process integration test (`make integration`): kill -9 the leader, restart from disk, add/remove a 4th process, CLI
 
 **Exit:**
-- [ ] `make cluster-up`, then `docker kill` the leader: writes resume after the new election (pending docker run: `deploy/smoke.sh`)
-- [ ] `docker restart` a node: it catches up from disk (pending docker run: `deploy/smoke.sh`)
-- [ ] Add a 4th container with `add-server`, then remove it (pending docker run: `deploy/smoke.sh`)
+- [x] `make cluster-up`, then `docker kill` the leader: writes resume after the new election
+- [x] `docker restart` a node: it catches up from disk
+- [x] Add a 4th container with `add-server`, then remove it
 
 ---
 

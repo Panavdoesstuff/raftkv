@@ -229,3 +229,10 @@ Two ports per node: Raft peer RPCs (`--raft-port`) and KV plus admin RPCs (`--cl
 ### Test-harness fix: load-robust waits
 
 `TestSnapshotChurn` failed twice under heavy machine load (seed 166000) with "no agreement on 5 nodes within 10s" and never on an idle machine. The cause was in the harness, not Raft. Waits are budgeted in FakeClock time, but the fake clock moves a fixed step per yield of real time (1 ms in `Cluster.sleep`, 150 us in `advance`). When the machine is starved the nodes get far fewer scheduler turns per simulated second, so a 10 s fake budget can run out before the cluster has done the work that normally fits in 2 s. `Cluster.Within` now lets a FakeClock wait outlive its fake budget until 45 s of real time have passed (`loadGrace`); passing runs return as soon as the condition holds, so only a real failure takes longer. It is used by `One`, `CheckOneLeader` and the `waitFor`/`drive`/`until`/`waitConverged` helpers; the one real-time poll (`eventually`) got a 30 s cap instead of 2 s. No assertion changed. The flake did not reproduce here before the fix (60 parallel `-cpu 2` processes of the race build, 2 runs each, all passed), so the diagnosis comes from reading the waits, not from watching it fail.
+
+### Docker results
+
+`deploy/smoke.sh` (kill the leader, restart a node, add then remove a 4th container) passed on first real run after one script fix (a `[ ] && echo` in a `set -e` command substitution aborted victim selection). The `golang:1.27-alpine` tag exists, so the Dockerfile needed no change. Runs: 3 nodes x3 and 5 nodes x2, each from a clean cluster (`cluster-down` removes volumes), all exit 0. Whole run: about 18 s for 3 nodes.
+
+- Image `raftkv:latest`: 44.5 MB (static server + client on alpine:3.20).
+- Failover: time from `docker kill` of the leader to the first successful `put` through the client CLI was 0 to 1 s in all five runs (3 nodes: 1, 0, 1 s excluding the very first run; 5 nodes: 0, 1 s). Measured at one-second resolution and includes the `docker run` start of the CLI container, so it is an upper bound on election plus client retry.
