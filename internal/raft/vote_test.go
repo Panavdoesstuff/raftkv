@@ -37,6 +37,12 @@ func startSolo(t *testing.T, st raft.Storage) *soloNode {
 	t.Helper()
 	clk := clock.NewFake()
 	net := transport.NewMemnet(1, clk)
+	// n1 grants PreVotes (so n0's election timeouts turn into real elections,
+	// which is what these tests watch) but never a real vote.
+	if err := net.Transport("n1").Serve("n1", preVoteOnly{}); err != nil {
+		t.Fatal(err)
+	}
+	net.SetNodeConnected("n1", true)
 	n := raft.New(raft.Config{
 		ID: "n0", Peers: []raft.NodeID{"n0", "n1", "n2"},
 		Transport: net.Transport("n0"), Clock: clk, Storage: st, Seed: testSeed(t),
@@ -46,6 +52,19 @@ func startSolo(t *testing.T, st raft.Storage) *soloNode {
 	}
 	t.Cleanup(n.Stop)
 	return &soloNode{t: t, n: n, clk: clk}
+}
+
+// preVoteOnly is a peer that says yes to every PreVote and no to everything else.
+type preVoteOnly struct{}
+
+func (preVoteOnly) RequestVote(_ context.Context, a *raft.RequestVoteArgs) (*raft.RequestVoteReply, error) {
+	return &raft.RequestVoteReply{Term: 0, VoteGranted: a.PreVote}, nil
+}
+func (preVoteOnly) AppendEntries(context.Context, *raft.AppendEntriesArgs) (*raft.AppendEntriesReply, error) {
+	return nil, context.Canceled
+}
+func (preVoteOnly) InstallSnapshot(context.Context, *raft.InstallSnapshotArgs) (*raft.InstallSnapshotReply, error) {
+	return nil, context.Canceled
 }
 
 func (s *soloNode) advance(d time.Duration) {

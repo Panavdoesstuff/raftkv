@@ -26,8 +26,12 @@ var ErrStopped = errors.New("raft: node stopped")
 
 // Config is everything a node needs. All of it is injected (BUILDMAP §1).
 type Config struct {
-	ID        NodeID
-	Peers     []NodeID // every voting member, including this node
+	ID NodeID
+	// Peers is the bootstrap voter set: the config in force until the log (or
+	// a snapshot) says otherwise. Include this node if it is an initial voter;
+	// a node joining an existing cluster leaves itself out and waits to be
+	// added (AddServer).
+	Peers     []NodeID
 	Transport Transport
 	Clock     clock.Clock
 	Storage   Storage
@@ -39,12 +43,11 @@ type Config struct {
 // RPC, a disk write or a channel send. After any unlock/relock, term and role
 // are re-checked before a reply is used.
 type Raft struct {
-	id    NodeID
-	cfg   Config
-	peers []NodeID // everyone but us
-	clk   clock.Clock
-	tr    Transport
-	slog  *slog.Logger
+	id   NodeID
+	cfg  Config
+	clk  clock.Clock
+	tr   Transport
+	slog *slog.Logger
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -73,12 +76,32 @@ type Raft struct {
 
 	commitIndex, lastApplied uint64
 
+	// Membership (membership.go). mem is the latest config in the log, set by
+	// the entry at cfgIndex (0: baseCfg). baseCfg is the config at snapIndex
+	// (or the bootstrap Peers when there is no snapshot). The rest is derived
+	// from mem by setConfig.
+	mem        ClusterConfig
+	cfgIndex   uint64
+	baseCfg    ClusterConfig
+	selfVoter  bool
+	voterPeers []NodeID // current voters except us
+	replPeers  []NodeID // voters and learners except us: everyone we replicate to
+
 	electionDeadline time.Time
 	nextHeartbeat    time.Time
-	votes            int
-	nextIndex        map[NodeID]uint64 // leader only
-	matchIndex       map[NodeID]uint64 // leader only
-	snapSending      map[NodeID]bool   // leader only: an InstallSnapshot to this peer is in flight
+	// Elections. voteGranted is this election's grants; preGrants/preActive/
+	// preEpoch track the current PreVote round (election.go).
+	voteGranted map[NodeID]bool
+	preGrants   map[NodeID]bool
+	preActive   bool
+	preEpoch    uint64
+	// heardLeader is when we last accepted an AppendEntries or InstallSnapshot
+	// from a current leader; vote and PreVote requests are ignored for
+	// electionTimeoutMin after it (thesis §4.2.3).
+	heardLeader time.Time
+	nextIndex   map[NodeID]uint64 // leader only
+	matchIndex  map[NodeID]uint64 // leader only
+	snapSending map[NodeID]bool   // leader only: an InstallSnapshot to this peer is in flight
 
 	// Read confirmation (readindex.go, lease.go); leader only, reset on taking office.
 	sendSeq     uint64               // number of heartbeat broadcasts this term
@@ -106,11 +129,8 @@ func New(cfg Config) *Raft {
 		applyWake: make(chan struct{}, 1),
 		appliedCh: make(chan struct{}),
 	}
-	for _, p := range cfg.Peers {
-		if p != cfg.ID {
-			r.peers = append(r.peers, p)
-		}
-	}
+	r.baseCfg = ClusterConfig{Voters: append([]NodeID(nil), cfg.Peers...)}.normalized()
+	r.setConfig(r.baseCfg.clone(), 0)
 	return r
 }
 
@@ -142,9 +162,17 @@ func (r *Raft) Start() error {
 		// snapshot before it applies anything from the log tail, and tells
 		// the consumer with a snapshot ApplyMsg.
 		r.snapIndex, r.snapTerm, r.snapData = snap.LastIncludedIndex, snap.LastIncludedTerm, snap.Data
+		if len(snap.Config) > 0 {
+			c, err := DecodeConfig(snap.Config)
+			if err != nil {
+				return err
+			}
+			r.baseCfg = c
+		}
 		r.commitIndex = snap.LastIncludedIndex
 		r.pendingSnap = true
 	}
+	r.refreshConfig() // latest config in the log, committed or not
 	r.role = Follower
 	r.resetElectionTimer()
 
@@ -186,9 +214,9 @@ func (r *Raft) Status() Status {
 	return Status{
 		ID: r.id, Role: r.role, Term: r.term,
 		CommitIndex: r.commitIndex, LastApplied: r.lastApplied, LastIndex: r.lastIndex(),
-		SnapIndex: r.snapIndex,
-		Leader:    r.leaderID,
-		Rounds:    r.sendSeq, PendingReads: len(r.readWaiters),
+		SnapIndex: r.snapIndex, ConfigIndex: r.cfgIndex,
+		Leader: r.leaderID,
+		Rounds: r.sendSeq, PendingReads: len(r.readWaiters),
 	}
 }
 
@@ -246,6 +274,9 @@ func (r *Raft) truncateFrom(i uint64) error {
 		r.logBytes -= entrySize(e)
 	}
 	r.entries = r.entries[:keep]
+	if r.cfgIndex >= i {
+		r.refreshConfig() // the config entry is gone: revert to the previous one
+	}
 	if err := r.cfg.Storage.TruncateFrom(i); err != nil {
 		return r.halt(err)
 	}
@@ -257,7 +288,7 @@ func (r *Raft) truncateFrom(i uint64) error {
 // prefix can be freed); if idx is at or past the end of the log nothing is
 // kept. Memory only: the caller has already made the snapshot durable.
 // Caller holds mu.
-func (r *Raft) compactTo(idx, term uint64, data []byte) {
+func (r *Raft) compactTo(idx, term uint64, data []byte, cfg ClusterConfig) {
 	drop := idx - r.snapIndex
 	if drop > uint64(len(r.entries)) {
 		drop = uint64(len(r.entries))
@@ -269,6 +300,7 @@ func (r *Raft) compactTo(idx, term uint64, data []byte) {
 		r.logBytes += entrySize(e)
 	}
 	r.snapIndex, r.snapTerm, r.snapData = idx, term, data
+	r.baseCfg = cfg
 }
 
 // LogSize is the size in bytes of the log entries held after the snapshot.
@@ -300,12 +332,13 @@ func (r *Raft) Snapshot(index uint64, data []byte) {
 	}
 	term := r.termAt(index)
 	data = append([]byte(nil), data...)
+	cfg := r.configAt(index) // the snapshot carries the config at its last index
 	// Durable before the in-memory log shrinks (disk write under mu, see below).
-	if err := r.cfg.Storage.SaveSnapshot(Snapshot{LastIncludedIndex: index, LastIncludedTerm: term, Data: data}); err != nil {
+	if err := r.cfg.Storage.SaveSnapshot(Snapshot{LastIncludedIndex: index, LastIncludedTerm: term, Data: data, Config: EncodeConfig(cfg)}); err != nil {
 		r.halt(err)
 		return
 	}
-	r.compactTo(index, term, data)
+	r.compactTo(index, term, data, cfg)
 	r.dbg("snapshot taken", "index", index, "logBytes", r.logBytes)
 }
 
@@ -478,8 +511,6 @@ func (r *Raft) applier() {
 	}
 }
 
-func (r *Raft) majority() int { return len(r.cfg.Peers)/2 + 1 }
-
 // resetElectionTimer pushes the deadline out by a fresh random timeout in
 // [150, 300) ms. Call it ONLY when granting a vote, accepting AppendEntries
 // from the current leader, or starting an election (Figure 2, Followers).
@@ -523,6 +554,9 @@ func (r *Raft) tick() {
 		return
 	}
 	if !now.Before(r.electionDeadline) {
-		r.startElection()
+		if !r.selfVoter {
+			return // learners and removed nodes never campaign
+		}
+		r.startPreVote()
 	}
 }

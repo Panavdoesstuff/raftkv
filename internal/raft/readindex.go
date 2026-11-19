@@ -73,7 +73,7 @@ func (r *Raft) startRead() (uint64, *readWaiter, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	if r.majority() == 1 {
+	if r.quorumCount(func(NodeID) bool { return false }) >= r.majority() { // we alone are a quorum
 		return idx, nil, nil
 	}
 	w := &readWaiter{need: r.sendSeq + 1, confirmed: make(chan struct{})}
@@ -128,13 +128,7 @@ func (r *Raft) checkReads() {
 	}
 	kept := r.readWaiters[:0]
 	for _, w := range r.readWaiters {
-		n := 1 // ourselves
-		for _, p := range r.peers {
-			if r.ackSeq[p] >= w.need {
-				n++
-			}
-		}
-		if n >= r.majority() {
+		if r.quorumCount(func(p NodeID) bool { return r.ackSeq[p] >= w.need }) >= r.majority() {
 			close(w.confirmed)
 		} else {
 			kept = append(kept, w)

@@ -70,6 +70,7 @@ type Cluster struct {
 	fake    *clock.FakeClock // non-nil when running on a FakeClock
 	factory Factory
 	ids     []raft.NodeID
+	initial []raft.NodeID // the bootstrap voter set every node starts from
 	members map[raft.NodeID]*member
 	newSM   func() raft.StateMachine
 	nodeClk func(id raft.NodeID, base clock.Clock) clock.Clock
@@ -116,6 +117,7 @@ func StartCluster(t testing.TB, n int, seed int64, f Factory, opts ...Option) *C
 	for i := 0; i < n; i++ {
 		c.ids = append(c.ids, raft.NodeID(fmt.Sprintf("n%d", i)))
 	}
+	c.initial = append([]raft.NodeID(nil), c.ids...)
 	for _, id := range c.ids {
 		c.members[id] = &member{id: id, storage: storage.NewMem()}
 		c.boot(id)
@@ -134,6 +136,19 @@ func StartCluster(t testing.TB, n int, seed int64, f Factory, opts ...Option) *C
 	return c
 }
 
+// AddNode starts a brand-new node with an empty log. Its bootstrap config is
+// the cluster's initial voter set without itself, so it is not a voter: it
+// stays passive until a leader adds it (AddServer) and replicates the log to
+// it. It is a cluster member from the harness's point of view at once.
+func (c *Cluster) AddNode(id raft.NodeID) {
+	if _, ok := c.members[id]; ok {
+		c.t.Fatalf("AddNode: %s already exists", id)
+	}
+	c.members[id] = &member{id: id, storage: storage.NewMem()}
+	c.boot(id)
+	c.ids = append(c.ids, id)
+}
+
 func (c *Cluster) boot(id raft.NodeID) {
 	m := c.members[id]
 	clk := c.Clock
@@ -141,7 +156,7 @@ func (c *Cluster) boot(id raft.NodeID) {
 		clk = c.nodeClk(id, c.Clock)
 	}
 	m.node = c.factory(Config{
-		ID: id, Peers: c.ids,
+		ID: id, Peers: c.initial,
 		Transport: c.Net.Transport(id),
 		Clock:     clk,
 		Storage:   m.storage, // the "disk" survives crashes
@@ -433,6 +448,11 @@ func (c *Cluster) One(cmd []byte, expected int, retry bool) uint64 {
 		}
 		if !retry {
 			c.t.Fatalf("one(%q): index %d did not commit on %d nodes", cmd, idx, expected)
+		}
+	}
+	for _, id := range c.ids {
+		if m := c.members[id]; m.alive {
+			c.t.Logf("  %+v", m.node.Status())
 		}
 	}
 	c.t.Fatalf("one(%q): no agreement on %d nodes within %v", cmd, expected, total)

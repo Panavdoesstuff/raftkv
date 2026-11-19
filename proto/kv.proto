@@ -13,6 +13,8 @@ enum Err {
   ERR_WRONG_LEADER = 1;
   ERR_TIMEOUT = 2;
   ERR_NO_KEY = 3;
+  ERR_CONFIG_BUSY = 4;  // membership change rejected for now (one at a time, or leader not ready): retry
+  ERR_FAILED = 5;       // membership change failed for good; see message
 }
 
 message CommandArgs {

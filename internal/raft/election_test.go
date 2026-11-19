@@ -104,12 +104,13 @@ func TestNoLeaderWithoutMajority(t *testing.T) {
 			c.Crash(id)
 		}
 	}
-	// Leader and one follower are down; the survivor can never win.
+	// Leader and one follower are down; the survivor can never win. With
+	// PreVote it keeps asking, is never told yes, and so never raises its term.
 	termBefore := status(c, survivor).Term
 	advance(c, 3*time.Second)
 	c.CheckNoLeader()
-	if s := status(c, survivor); s.Role != raft.Candidate || s.Term <= termBefore {
-		t.Fatalf("survivor should keep campaigning in higher terms, got %+v (was term %d)", s, termBefore)
+	if s := status(c, survivor); s.Role == raft.Leader || s.Term != termBefore {
+		t.Fatalf("survivor must stay a non-leader without inflating its term, got %+v (was term %d)", s, termBefore)
 	}
 
 	// Restore a majority: a leader appears.

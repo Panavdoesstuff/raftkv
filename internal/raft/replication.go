@@ -15,7 +15,7 @@ const maxBatch = 256
 func (r *Raft) broadcastHeartbeats() {
 	r.sendSeq++
 	r.nextHeartbeat = r.clk.Now().Add(heartbeatInterval)
-	for _, p := range r.peers {
+	for _, p := range r.replPeers {
 		r.sendAppend(p)
 	}
 }
@@ -107,7 +107,7 @@ func (r *Raft) initLeaderState() {
 	r.ackSeq = map[NodeID]uint64{}
 	r.ackSent = map[NodeID]time.Time{}
 	r.readWaiters = nil
-	for _, p := range r.peers {
+	for _, p := range r.replPeers {
 		r.nextIndex[p] = r.lastIndex() + 1
 	}
 }
@@ -121,15 +121,12 @@ func (r *Raft) advanceCommit() {
 		if r.termAt(n) != r.term {
 			break // terms are non-decreasing: nothing lower is from this term either
 		}
-		count := 1 // ourselves
-		for _, p := range r.peers {
-			if r.matchIndex[p] >= n {
-				count++
-			}
-		}
-		if count >= r.majority() {
+		// Only current voters count; a leader that is not a voter (it removed
+		// itself) is not in its own majority.
+		if r.quorumCount(func(p NodeID) bool { return r.matchIndex[p] >= n }) >= r.majority() {
 			r.commitIndex = n
 			r.notifyApply()
+			r.maybeStepDownRemoved()
 			return
 		}
 	}
@@ -188,6 +185,8 @@ func (r *Raft) AppendEntries(_ context.Context, a *AppendEntriesArgs) (*AppendEn
 		return nil, err
 	}
 	r.leaderID = a.LeaderID
+	r.heardLeader = r.clk.Now()
+	r.preActive = false
 	r.resetElectionTimer() // valid reset: AppendEntries from the current leader
 
 	// Consistency check: we must hold an entry at PrevLogIndex with PrevLogTerm.
@@ -223,6 +222,7 @@ func (r *Raft) AppendEntries(_ context.Context, a *AppendEntriesArgs) (*AppendEn
 		if err := r.persistAppend(added); err != nil { // durable before we ack
 			return nil, err
 		}
+		r.noteConfigEntries(added) // a config takes effect when appended
 		break
 	}
 
@@ -253,7 +253,8 @@ func (r *Raft) sendSnapshot(p NodeID) {
 	a := &InstallSnapshotArgs{
 		Term: r.term, LeaderID: r.id,
 		LastIncludedIndex: r.snapIndex, LastIncludedTerm: r.snapTerm,
-		Data: r.snapData, // immutable once set; transports copy what they need
+		Config: EncodeConfig(r.baseCfg),
+		Data:   r.snapData, // immutable once set; transports copy what they need
 	}
 	r.wg.Add(1)
 	go r.installTo(p, a, seq, sentAt)
@@ -323,6 +324,8 @@ func (r *Raft) InstallSnapshot(_ context.Context, a *InstallSnapshotArgs) (*Inst
 		return nil, err
 	}
 	r.leaderID = a.LeaderID
+	r.heardLeader = r.clk.Now()
+	r.preActive = false
 	r.resetElectionTimer()
 
 	idx := a.LastIncludedIndex
@@ -340,10 +343,18 @@ func (r *Raft) InstallSnapshot(_ context.Context, a *InstallSnapshotArgs) (*Inst
 			return nil, err
 		}
 	}
-	if err := r.cfg.Storage.SaveSnapshot(Snapshot{LastIncludedIndex: idx, LastIncludedTerm: a.LastIncludedTerm, Data: data}); err != nil {
+	if err := r.cfg.Storage.SaveSnapshot(Snapshot{LastIncludedIndex: idx, LastIncludedTerm: a.LastIncludedTerm, Data: data, Config: a.Config}); err != nil {
 		return nil, r.halt(err)
 	}
-	r.compactTo(idx, a.LastIncludedTerm, data)
+	cfg := r.baseCfg
+	if len(a.Config) > 0 {
+		var err error
+		if cfg, err = DecodeConfig(a.Config); err != nil {
+			return nil, r.halt(err)
+		}
+	}
+	r.compactTo(idx, a.LastIncludedTerm, data, cfg)
+	r.refreshConfig() // the log suffix we kept may hold newer config entries
 	r.commitIndex = idx
 	r.pendingSnap = true
 	r.notifyApply()

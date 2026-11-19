@@ -208,6 +208,44 @@ func (s *Server) Command(ctx context.Context, a *kvpb.CommandArgs) (*kvpb.Comman
 	}
 }
 
+// Membership is the part of Raft that changes the cluster (raft.Raft has it;
+// test stubs need not).
+type Membership interface {
+	AddServer(ctx context.Context, id raft.NodeID, addr string) error
+	RemoveServer(ctx context.Context, id raft.NodeID) error
+}
+
+// AddServer runs a membership change on this node, which must lead. Both calls
+// are idempotent, so a client that timed out simply asks again.
+func (s *Server) AddServer(ctx context.Context, a *kvpb.MembershipArgs) (*kvpb.MembershipReply, error) {
+	return s.membership(func(m Membership) error { return m.AddServer(ctx, raft.NodeID(a.Id), a.Addr) }, ctx)
+}
+
+func (s *Server) RemoveServer(ctx context.Context, a *kvpb.MembershipArgs) (*kvpb.MembershipReply, error) {
+	return s.membership(func(m Membership) error { return m.RemoveServer(ctx, raft.NodeID(a.Id)) }, ctx)
+}
+
+func (s *Server) membership(do func(Membership) error, ctx context.Context) (*kvpb.MembershipReply, error) {
+	m, ok := s.rf.(Membership)
+	if !ok {
+		return &kvpb.MembershipReply{Err: kvpb.Err_ERR_FAILED, Message: "membership changes not supported"}, nil
+	}
+	err := do(m)
+	hint := string(s.rf.Status().Leader)
+	switch {
+	case err == nil:
+		return &kvpb.MembershipReply{Err: kvpb.Err_OK}, nil
+	case errors.Is(err, raft.ErrNotLeader), errors.Is(err, raft.ErrStopped):
+		return &kvpb.MembershipReply{Err: kvpb.Err_ERR_WRONG_LEADER, LeaderHint: hint}, nil
+	case errors.Is(err, raft.ErrNotReady), errors.Is(err, raft.ErrConfigPending):
+		return &kvpb.MembershipReply{Err: kvpb.Err_ERR_CONFIG_BUSY, Message: err.Error()}, nil
+	case ctx.Err() != nil:
+		return nil, ctx.Err()
+	default:
+		return &kvpb.MembershipReply{Err: kvpb.Err_ERR_FAILED, Message: err.Error()}, nil
+	}
+}
+
 func (s *Server) wrongLeader() *kvpb.CommandReply {
 	return &kvpb.CommandReply{Err: kvpb.Err_ERR_WRONG_LEADER, LeaderHint: string(s.rf.Status().Leader)}
 }

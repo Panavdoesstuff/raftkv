@@ -59,6 +59,7 @@ func (m *MemStorage) SaveSnapshot(s raft.Snapshot) error {
 		return nil // older than what we hold
 	}
 	s.Data = append([]byte(nil), s.Data...)
+	s.Config = append([]byte(nil), s.Config...)
 	m.snap = &s
 	kept := m.log[:0:0]
 	for _, e := range m.log {
@@ -77,6 +78,7 @@ func (m *MemStorage) Load() (raft.HardState, []raft.Entry, *raft.Snapshot, error
 	if m.snap != nil {
 		c := *m.snap
 		c.Data = append([]byte(nil), c.Data...)
+		c.Config = append([]byte(nil), c.Config...)
 		snap = &c
 	}
 	return m.hs, raft.CloneEntries(m.log), snap, nil

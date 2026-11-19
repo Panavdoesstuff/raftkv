@@ -314,8 +314,11 @@ func (s *FileStorage) SaveSnapshot(snap raft.Snapshot) error {
 
 func (s *FileStorage) writeSnapshotFile(snap raft.Snapshot) error {
 	snap.Data = append([]byte(nil), snap.Data...)
+	snap.Config = append([]byte(nil), snap.Config...)
 	body := binary.LittleEndian.AppendUint64(nil, snap.LastIncludedIndex)
 	body = binary.LittleEndian.AppendUint64(body, snap.LastIncludedTerm)
+	body = binary.LittleEndian.AppendUint32(body, uint32(len(snap.Config)))
+	body = append(body, snap.Config...)
 	body = append(body, snap.Data...)
 	buf := binary.LittleEndian.AppendUint32(nil, crc32.Checksum(body, crcTable))
 	buf = append(buf, body...)
@@ -354,6 +357,7 @@ func (s *FileStorage) Load() (raft.HardState, []raft.Entry, *raft.Snapshot, erro
 	if s.snap != nil {
 		c := *s.snap
 		c.Data = append([]byte(nil), c.Data...)
+		c.Config = append([]byte(nil), c.Config...)
 		snap = &c
 	}
 	return s.hs, raft.CloneEntries(s.log), snap, nil
@@ -381,13 +385,19 @@ func readSnapshotFile(path string) (*raft.Snapshot, error) {
 	}
 	// Written by temp file + rename, so it is whole or absent. Anything else
 	// is damage.
-	if len(b) < 20 || crc32.Checksum(b[4:], crcTable) != binary.LittleEndian.Uint32(b) {
+	// crc | index | term | configLen | config | data
+	if len(b) < 24 || crc32.Checksum(b[4:], crcTable) != binary.LittleEndian.Uint32(b) {
 		return nil, fmt.Errorf("%w: snapshot file", ErrCorrupt)
+	}
+	n := int(binary.LittleEndian.Uint32(b[20:]))
+	if n < 0 || 24+n > len(b) {
+		return nil, fmt.Errorf("%w: snapshot file config length", ErrCorrupt)
 	}
 	return &raft.Snapshot{
 		LastIncludedIndex: binary.LittleEndian.Uint64(b[4:]),
 		LastIncludedTerm:  binary.LittleEndian.Uint64(b[12:]),
-		Data:              append([]byte(nil), b[20:]...),
+		Config:            append([]byte(nil), b[24:24+n]...),
+		Data:              append([]byte(nil), b[24+n:]...),
 	}, nil
 }
 

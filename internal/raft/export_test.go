@@ -26,3 +26,10 @@ func (r *Raft) AdvanceCommit() {
 	defer r.mu.Unlock()
 	r.advanceCommit()
 }
+
+// SetTerm raises the node's term without any of the usual side effects.
+func (r *Raft) SetTerm(t uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.term = t
+}

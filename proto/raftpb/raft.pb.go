@@ -425,6 +425,7 @@ type InstallSnapshotArgs struct {
 	LastIncludedIndex uint64                 `protobuf:"varint,3,opt,name=last_included_index,json=lastIncludedIndex,proto3" json:"last_included_index,omitempty"`
 	LastIncludedTerm  uint64                 `protobuf:"varint,4,opt,name=last_included_term,json=lastIncludedTerm,proto3" json:"last_included_term,omitempty"`
 	Data              []byte                 `protobuf:"bytes,5,opt,name=data,proto3" json:"data,omitempty"`
+	Config            []byte                 `protobuf:"bytes,6,opt,name=config,proto3" json:"config,omitempty"` // encoded cluster config at last_included_index
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -490,6 +491,13 @@ func (x *InstallSnapshotArgs) GetLastIncludedTerm() uint64 {
 func (x *InstallSnapshotArgs) GetData() []byte {
 	if x != nil {
 		return x.Data
+	}
+	return nil
+}
+
+func (x *InstallSnapshotArgs) GetConfig() []byte {
+	if x != nil {
+		return x.Config
 	}
 	return nil
 }
@@ -568,13 +576,14 @@ const file_proto_raft_proto_rawDesc = "" +
 	"\x04term\x18\x01 \x01(\x04R\x04term\x12\x18\n" +
 	"\asuccess\x18\x02 \x01(\bR\asuccess\x12#\n" +
 	"\rconflict_term\x18\x03 \x01(\x04R\fconflictTerm\x12%\n" +
-	"\x0econflict_index\x18\x04 \x01(\x04R\rconflictIndex\"\xb8\x01\n" +
+	"\x0econflict_index\x18\x04 \x01(\x04R\rconflictIndex\"\xd0\x01\n" +
 	"\x13InstallSnapshotArgs\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x04R\x04term\x12\x1b\n" +
 	"\tleader_id\x18\x02 \x01(\tR\bleaderId\x12.\n" +
 	"\x13last_included_index\x18\x03 \x01(\x04R\x11lastIncludedIndex\x12,\n" +
 	"\x12last_included_term\x18\x04 \x01(\x04R\x10lastIncludedTerm\x12\x12\n" +
-	"\x04data\x18\x05 \x01(\fR\x04data\"*\n" +
+	"\x04data\x18\x05 \x01(\fR\x04data\x12\x16\n" +
+	"\x06config\x18\x06 \x01(\fR\x06config\"*\n" +
 	"\x14InstallSnapshotReply\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x04R\x04term*?\n" +
 	"\tEntryType\x12\x10\n" +

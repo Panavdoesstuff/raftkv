@@ -48,6 +48,7 @@ message InstallSnapshotArgs {
   uint64 last_included_index = 3;
   uint64 last_included_term = 4;
   bytes data = 5;
+  bytes config = 6;  // encoded cluster config at last_included_index
 }
 message InstallSnapshotReply {
   uint64 term = 1;

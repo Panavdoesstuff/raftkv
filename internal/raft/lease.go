@@ -51,12 +51,18 @@ func (r *Raft) leaseValid() bool {
 // lastMajorityAck is the latest instant T such that a majority (counting
 // ourselves) acked an AppendEntries sent at or after T. Caller holds mu.
 func (r *Raft) lastMajorityAck() (time.Time, bool) {
-	need := r.majority() - 1 // acks needed from peers
-	if need == 0 {
+	need := r.majority() // voter acks needed, ourselves included if we are one
+	if r.selfVoter {
+		need--
+	}
+	if need <= 0 {
 		return r.clk.Now(), true
 	}
-	ts := make([]time.Time, 0, len(r.peers))
-	for _, p := range r.peers {
+	if need > len(r.voterPeers) {
+		return time.Time{}, false
+	}
+	ts := make([]time.Time, 0, len(r.voterPeers))
+	for _, p := range r.voterPeers {
 		ts = append(ts, r.ackSent[p])
 	}
 	sort.Slice(ts, func(i, j int) bool { return ts[i].After(ts[j]) })

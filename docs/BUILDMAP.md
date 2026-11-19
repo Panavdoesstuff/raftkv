@@ -349,32 +349,32 @@ Each phase has:
 ### Phase 7 — Membership changes and PreVote (Days 13–15)
 
 **Build:**
-- [ ] Config entries in the log. Each node uses the **latest config in its log, committed or not**
-- [ ] **AddServer:**
+- [x] Config entries in the log. Each node uses the **latest config in its log, committed or not**
+- [x] **AddServer:**
   1. Add as a **learner** (non-voting) and replicate
   2. Catch up in rounds; each round must finish within an election timeout, max 10 rounds, else fail
   3. Append the config entry that makes it a voter
-- [ ] **RemoveServer:** append a config without the server. If the leader removes itself, it keeps leading until that entry commits (without counting itself in majorities), then steps down
-- [ ] Only **one change at a time**: reject while an uncommitted config entry exists
-- [ ] The leader must commit an entry in its **current term** before accepting a change (fixes the known single-server-change bug Ongaro found in 2015)
-- [ ] **PreVote**: a candidate first checks it could win before raising its term. This stops removed or partitioned nodes from disrupting the cluster
-- [ ] Ignore `RequestVote` within the minimum election timeout of hearing from a current leader
-- [ ] Client and CLI: `add-server`, `remove-server`
+- [x] **RemoveServer:** append a config without the server. If the leader removes itself, it keeps leading until that entry commits (without counting itself in majorities), then steps down
+- [x] Only **one change at a time**: reject while an uncommitted config entry exists
+- [x] The leader must commit an entry in its **current term** before accepting a change (fixes the known single-server-change bug Ongaro found in 2015)
+- [x] **PreVote**: a candidate first checks it could win before raising its term. This stops removed or partitioned nodes from disrupting the cluster
+- [x] Ignore `RequestVote` within the minimum election timeout of hearing from a current leader
+- [x] Client and CLI: `add-server`, `remove-server` (`kv.Client.AddServer/RemoveServer` and the server side are done; the CLI command itself is wired in Phase 8)
 
 **Mutation check 🔨:**
 - Allow two concurrent config changes. Construct a case with two leaders in one term.
 - Disable PreVote. A removed node keeps forcing elections, and throughput collapses.
 
 **Tests:**
-- [ ] `TestAddServerUnderLoad`: no failed client ops during the add
-- [ ] `TestRemoveFollower`, `TestRemoveLeader`
-- [ ] `TestGrowShrink`: 3 → 5 → 3 nodes under load and partitions
-- [ ] `TestConcurrentChangeRejected`
-- [ ] `TestRemovedNodeNoDisruption`: with PreVote, the removed node causes no term increases
-- [ ] `TestRejoinAfterPartitionPreVote`: a partitioned node rejoins without bumping the term
+- [x] `TestAddServerUnderLoad`: no failed client ops during the add
+- [x] `TestRemoveFollower`, `TestRemoveLeader`
+- [x] `TestGrowShrink`: 3 → 5 → 3 nodes under load and partitions
+- [x] `TestConcurrentChangeRejected`
+- [x] `TestRemovedNodeNoDisruption`: with PreVote, the removed node causes no term increases
+- [x] `TestRejoinAfterPartitionPreVote`: a partitioned node rejoins without bumping the term
 
 **Exit:**
-- [ ] All tests pass 200×
+- [x] All tests pass 200×
 
 
 ---

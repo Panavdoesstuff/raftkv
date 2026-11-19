@@ -77,6 +77,8 @@ const (
 	Err_ERR_WRONG_LEADER Err = 1
 	Err_ERR_TIMEOUT      Err = 2
 	Err_ERR_NO_KEY       Err = 3
+	Err_ERR_CONFIG_BUSY  Err = 4 // membership change rejected for now (one at a time, or leader not ready): retry
+	Err_ERR_FAILED       Err = 5 // membership change failed for good; see message
 )
 
 // Enum value maps for Err.
@@ -86,12 +88,16 @@ var (
 		1: "ERR_WRONG_LEADER",
 		2: "ERR_TIMEOUT",
 		3: "ERR_NO_KEY",
+		4: "ERR_CONFIG_BUSY",
+		5: "ERR_FAILED",
 	}
 	Err_value = map[string]int32{
 		"OK":               0,
 		"ERR_WRONG_LEADER": 1,
 		"ERR_TIMEOUT":      2,
 		"ERR_NO_KEY":       3,
+		"ERR_CONFIG_BUSY":  4,
+		"ERR_FAILED":       5,
 	}
 )
 
@@ -398,13 +404,16 @@ const file_proto_kv_proto_rawDesc = "" +
 	"\x03GET\x10\x00\x12\a\n" +
 	"\x03PUT\x10\x01\x12\n" +
 	"\n" +
-	"\x06APPEND\x10\x02*D\n" +
+	"\x06APPEND\x10\x02*i\n" +
 	"\x03Err\x12\x06\n" +
 	"\x02OK\x10\x00\x12\x14\n" +
 	"\x10ERR_WRONG_LEADER\x10\x01\x12\x0f\n" +
 	"\vERR_TIMEOUT\x10\x02\x12\x0e\n" +
 	"\n" +
-	"ERR_NO_KEY\x10\x032\xcb\x01\n" +
+	"ERR_NO_KEY\x10\x03\x12\x13\n" +
+	"\x0fERR_CONFIG_BUSY\x10\x04\x12\x0e\n" +
+	"\n" +
+	"ERR_FAILED\x10\x052\xcb\x01\n" +
 	"\x02KV\x12:\n" +
 	"\aCommand\x12\x16.raftkv.kv.CommandArgs\x1a\x17.raftkv.kv.CommandReply\x12B\n" +
 	"\tAddServer\x12\x19.raftkv.kv.MembershipArgs\x1a\x1a.raftkv.kv.MembershipReply\x12E\n" +

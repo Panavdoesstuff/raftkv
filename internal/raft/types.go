@@ -55,6 +55,10 @@ type Snapshot struct {
 	LastIncludedIndex uint64
 	LastIncludedTerm  uint64
 	Data              []byte
+	// Config is the encoded cluster configuration in force at
+	// LastIncludedIndex (membership.go). The config entries the snapshot
+	// covers are gone from the log, so this is the only place it survives.
+	Config []byte
 }
 
 type RequestVoteArgs struct {
@@ -92,6 +96,7 @@ type InstallSnapshotArgs struct {
 	LastIncludedIndex uint64
 	LastIncludedTerm  uint64
 	Data              []byte
+	Config            []byte // cluster config at LastIncludedIndex
 }
 
 type InstallSnapshotReply struct {
@@ -109,6 +114,7 @@ func (a *AppendEntriesArgs) Clone() *AppendEntriesArgs {
 func (a *InstallSnapshotArgs) Clone() *InstallSnapshotArgs {
 	c := *a
 	c.Data = append([]byte(nil), a.Data...)
+	c.Config = append([]byte(nil), a.Config...)
 	return &c
 }
 
@@ -191,6 +197,7 @@ type Status struct {
 	LastApplied uint64
 	LastIndex   uint64
 	SnapIndex   uint64 // last index covered by the snapshot (0 if none)
+	ConfigIndex uint64 // index of the latest config entry in the log (0: initial or snapshot config)
 	Leader      NodeID // who this node believes leads ("" if unknown); a client hint only
 	// Leader-only read-path counters: heartbeat broadcasts so far this term,
 	// and ReadIndex calls waiting for a majority-acked round.
