@@ -5,6 +5,9 @@ NODES ?= 3
 N ?= 100
 PKG ?= ./...
 RUN ?= .
+DUR ?= 20s
+SEED ?= 0
+SCENARIO ?= random
 
 .PHONY: test integration stress chaos chaos-docker cluster-up cluster-down bench proto
 
@@ -23,11 +26,15 @@ stress:
 	  if [ $$rc -ne 0 ]; then grep -E '^(--- FAIL|FAIL|panic)|seed|DATA RACE' stress.log | head -n 40; fi; tail -n 20 stress.log; \
 	  echo "stress: exit $$rc (full log: stress.log)"; exit $$rc
 
+# N random scenario/seed runs on memnet (SCENARIO=name to fix the scenario,
+# SEED=n to reproduce; the seed is printed). Prints a per-scenario summary and
+# exits non-zero if any run failed. Run directories go to chaos-runs/.
 chaos:
-	go run ./cmd/chaos -target=memnet -runs=$(N)
+	@go run ./cmd/chaos -target=memnet -runs=$(N) -duration=$(DUR) -seed=$(SEED) -scenario=$(SCENARIO); rc=$$?; echo "chaos: exit $$rc"; exit $$rc
 
+# The same on the Docker cluster (rebuilt for every run; needs a running daemon).
 chaos-docker:
-	go run ./cmd/chaos -target=docker -runs=$(N)
+	@go run ./cmd/chaos -target=docker -runs=$(N) -duration=$(DUR) -seed=$(SEED) -scenario=$(SCENARIO); rc=$$?; echo "chaos: exit $$rc"; exit $$rc
 
 # NODES=3 (default) or NODES=5. The node-N joiner (profile "join") is started by
 # deploy/smoke.sh, not here.
