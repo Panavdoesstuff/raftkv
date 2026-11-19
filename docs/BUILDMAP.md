@@ -382,16 +382,17 @@ Each phase has:
 ### Phase 8 — Real cluster over gRPC (Day 16)
 
 **Build:**
-- [ ] A `grpc` transport implementing `Transport`, with per-RPC deadlines
-- [ ] `cmd/server` with flags and a data directory per node
-- [ ] Admin service: status (role, term, commit index, config), network rules, clock skew
-- [ ] `Dockerfile`, and `docker-compose.3.yml` / `docker-compose.5.yml` with a volume per node
-- [ ] `cmd/client` CLI
+- [x] A `grpc` transport implementing `Transport`, with per-RPC deadlines
+- [x] `cmd/server` with flags and a data directory per node
+- [x] Admin service: status (role, term, commit index, config), network rules, clock skew
+- [x] `Dockerfile`, and `docker-compose.3.yml` / `docker-compose.5.yml` with a volume per node
+- [x] `cmd/client` CLI
+- [x] Local multi-process integration test (`make integration`): kill -9 the leader, restart from disk, add/remove a 4th process, CLI
 
 **Exit:**
-- [ ] `make cluster-up`, then `docker kill` the leader: writes resume after the new election
-- [ ] `docker restart` a node: it catches up from disk
-- [ ] Add a 4th container with `add-server`, then remove it
+- [ ] `make cluster-up`, then `docker kill` the leader: writes resume after the new election (pending docker run: `deploy/smoke.sh`)
+- [ ] `docker restart` a node: it catches up from disk (pending docker run: `deploy/smoke.sh`)
+- [ ] Add a 4th container with `add-server`, then remove it (pending docker run: `deploy/smoke.sh`)
 
 ---
 

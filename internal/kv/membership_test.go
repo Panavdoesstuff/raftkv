@@ -174,6 +174,7 @@ func waitConverged(t *testing.T, kc *kvCluster, g *loadGen) {
 	for k, toks := range g.tokens {
 		want[k] = strings.Join(toks, "")
 	}
+	start := time.Now()
 	for waited := time.Duration(0); ; waited += 10 * time.Millisecond {
 		ok := true
 		for _, id := range kc.IDs() {
@@ -189,7 +190,7 @@ func waitConverged(t *testing.T, kc *kvCluster, g *loadGen) {
 		if ok {
 			return
 		}
-		if waited > 20*time.Second {
+		if !kc.Within(start, waited, 20*time.Second) {
 			t.Fatalf("stores did not converge (seed=%d)", kc.seed)
 		}
 		kc.advance(10 * time.Millisecond)

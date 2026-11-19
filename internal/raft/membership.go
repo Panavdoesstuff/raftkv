@@ -107,6 +107,9 @@ func (r *Raft) Config() ClusterConfig {
 // it. Caller holds mu.
 func (r *Raft) setConfig(c ClusterConfig, idx uint64) {
 	r.mem, r.cfgIndex = c, idx
+	if aw, ok := r.tr.(AddrAware); ok && len(c.Addrs) > 0 {
+		aw.SetAddrs(c.Addrs)
+	}
 	r.selfVoter = c.IsVoter(r.id)
 	r.voterPeers, r.replPeers = nil, nil
 	for _, p := range c.Voters {

@@ -1,0 +1,6 @@
+.git
+bench
+chaos-failures
+stress.log
+*.test
+docs

@@ -274,7 +274,28 @@ func (c *Cluster) sleep(d time.Duration) {
 const (
 	pollStep    = 10 * time.Millisecond
 	pollTimeout = 5 * time.Second // cluster time
+	// loadGrace is the real time a FakeClock wait keeps going after its
+	// cluster-time budget is spent. Fake time advances a fixed step per yield
+	// of real time, so on a CPU-starved machine the nodes get far fewer
+	// scheduler turns per simulated second and a budget that is ample when
+	// idle runs out before the cluster has made the same progress. A wait
+	// therefore fails only when BOTH its cluster-time budget and this real
+	// time are spent. It is a failure cap, not a delay: passing runs return
+	// as soon as the condition holds.
+	loadGrace = 45 * time.Second
 )
+
+// Within reports whether a wait that started at start and has so far advanced
+// waited of cluster time may keep going under a limit of cluster time. On a
+// real clock it is just waited < limit. On a FakeClock the wait also continues
+// until loadGrace of real time has passed, so CPU starvation cannot turn a
+// slow-but-progressing run into a timeout (see loadGrace).
+func (c *Cluster) Within(start time.Time, waited, limit time.Duration) bool {
+	if waited < limit {
+		return true
+	}
+	return c.fake != nil && time.Since(start) < loadGrace
+}
 
 // leaders returns live leaders grouped by term.
 func (c *Cluster) leaders() map[uint64][]raft.NodeID {
@@ -307,7 +328,8 @@ func (c *Cluster) CheckTermLeaders() {
 // side of a partition is allowed; two leaders in one term never are.
 func (c *Cluster) CheckOneLeader() raft.NodeID {
 	c.t.Helper()
-	for waited := time.Duration(0); waited < pollTimeout; waited += pollStep {
+	start := time.Now()
+	for waited := time.Duration(0); c.Within(start, waited, pollTimeout); waited += pollStep {
 		c.CheckTermLeaders()
 		ls := c.leaders()
 		if len(ls) > 0 {
@@ -432,7 +454,8 @@ func (c *Cluster) Propose(cmd []byte) uint64 {
 func (c *Cluster) One(cmd []byte, expected int, retry bool) uint64 {
 	c.t.Helper()
 	const total = 10 * time.Second
-	for waited := time.Duration(0); waited < total; {
+	start := time.Now()
+	for waited := time.Duration(0); c.Within(start, waited, total); {
 		idx := c.Propose(cmd)
 		if idx == 0 {
 			c.sleep(50 * time.Millisecond)

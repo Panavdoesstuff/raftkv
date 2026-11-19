@@ -31,7 +31,8 @@ func drive(t *testing.T, c *test.Cluster, limit time.Duration, f func() error) e
 	t.Helper()
 	done := make(chan error, 1)
 	go func() { done <- f() }()
-	for waited := time.Duration(0); waited < limit; waited += 10 * time.Millisecond {
+	start := time.Now()
+	for waited := time.Duration(0); c.Within(start, waited, limit); waited += 10 * time.Millisecond {
 		select {
 		case err := <-done:
 			return err

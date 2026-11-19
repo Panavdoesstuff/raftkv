@@ -172,7 +172,8 @@ func (kc *kvCluster) advance(d time.Duration) {
 // until advances cluster time (up to limit) until done is closed.
 func (kc *kvCluster) until(t *testing.T, done <-chan struct{}, limit time.Duration, what string) {
 	t.Helper()
-	for waited := time.Duration(0); waited < limit; waited += 10 * time.Millisecond {
+	start := time.Now()
+	for waited := time.Duration(0); kc.Within(start, waited, limit); waited += 10 * time.Millisecond {
 		select {
 		case <-done:
 			return

@@ -132,6 +132,14 @@ type Transport interface {
 	Serve(id NodeID, h Peer) error // register this node's handlers
 }
 
+// AddrAware is optionally implemented by a Transport that dials by address.
+// Raft calls SetAddrs with the Addrs of every config it adopts, so a node
+// added by AddServer becomes reachable on every member (Phase 8). It must not
+// block or call back into Raft.
+type AddrAware interface {
+	SetAddrs(addrs map[NodeID]string)
+}
+
 // Storage is a node's durable state. Every mutating method must be durable
 // (fsync'd) before it returns.
 type Storage interface {

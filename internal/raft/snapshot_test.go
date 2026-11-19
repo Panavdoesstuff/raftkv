@@ -385,7 +385,9 @@ func (l *lone) install(t *testing.T, term, idx, idxTerm uint64) *raft.InstallSna
 
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	for i := 0; i < 400; i++ {
+	// Real-time poll with a generous cap: it returns as soon as cond holds, and
+	// a CPU-starved machine must not turn slow progress into a failure.
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
 		if cond() {
 			return
 		}

@@ -6,10 +6,15 @@ N ?= 100
 PKG ?= ./...
 RUN ?= .
 
-.PHONY: test stress chaos chaos-docker cluster-up cluster-down bench proto
+.PHONY: test integration stress chaos chaos-docker cluster-up cluster-down bench proto
 
 test:
 	go test ./... -race
+
+# Real multi-process cluster test (builds cmd/server and cmd/client). Slow, so
+# it is behind the integration build tag and not part of `make test`.
+integration:
+	go test -tags integration -count=1 -timeout 5m ./test/integration
 
 # Repeat one test N times with -race; stop on first failure.
 # Usage: make stress PKG=./internal/raft RUN=Election N=500
@@ -24,11 +29,13 @@ chaos:
 chaos-docker:
 	go run ./cmd/chaos -target=docker -runs=$(N)
 
+# NODES=3 (default) or NODES=5. The node-N joiner (profile "join") is started by
+# deploy/smoke.sh, not here.
 cluster-up:
 	docker compose -f deploy/docker-compose.$(NODES).yml up -d --build
 
 cluster-down:
-	docker compose -f deploy/docker-compose.$(NODES).yml down -v
+	docker compose -f deploy/docker-compose.$(NODES).yml --profile join down -v --remove-orphans
 
 bench:
 	go run ./cmd/bench -out=bench/results

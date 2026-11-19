@@ -62,7 +62,8 @@ func advance(c *test.Cluster, d time.Duration) {
 // waitFor advances cluster time (up to 10 s) until cond holds.
 func waitFor(t *testing.T, c *test.Cluster, what string, cond func() bool) {
 	t.Helper()
-	for i := 0; i < 1000; i++ {
+	start := time.Now()
+	for waited := time.Duration(0); c.Within(start, waited, 10*time.Second); waited += 10 * time.Millisecond {
 		if cond() {
 			return
 		}

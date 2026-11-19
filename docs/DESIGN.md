@@ -205,3 +205,27 @@ With PreVote ([election.go](../internal/raft/election.go)) a node whose timer fi
 ### Limits
 
 A removed follower is not sent the entry that removes it, so it keeps believing it is a member (and PreVoting, harmlessly) until it is shut down. A learner that fails catch-up stays in the config as a learner until removed; retrying `AddServer` resumes it.
+
+## Phase 8 — Real cluster over gRPC
+
+### Transport ([grpc.go](../internal/transport/grpc.go))
+
+- **Deadlines.** Every RPC runs under `context.WithTimeout`: 500 ms for RequestVote and AppendEntries, 10 s for InstallSnapshot (a whole state image in one message; the size limit is raised to 256 MiB). A heartbeat slower than an election timeout is as good as lost, so a short deadline costs nothing and keeps a stuck peer from pinning a replication goroutine. Raft retries on its own schedule; the transport never retries.
+- **Lazy dialing.** `grpc.NewClient` connects on first use and reconnects by itself. The reconnect backoff is capped at 500 ms (the default cap is 120 s, which would leave a restarted peer unreachable for minutes). A down or not-yet-added peer costs nothing until it is used. `TestGRPCRoundTripAndAddrs` covers the dead-peer and reconnect path.
+- **Addresses.** The transport keeps `NodeID -> addr`, seeded from `--peers`. Membership configs carry `Addrs`; Raft calls the optional `raft.AddrAware.SetAddrs` whenever it adopts a config (`setConfig`), on every node, so a server added with add-server becomes reachable from all members, including after a restart (the config is rebuilt from the log or snapshot). `SetAddrs` only updates a map under its own lock.
+
+### Joining a node
+
+`--join` starts the process with an empty log and a bootstrap voter set that leaves itself out, so it never campaigns (`tick` skips non-voters). The operator then runs `client add-server ID RAFT_ADDR`; the leader adds it as a learner, catches it up in rounds (or by InstallSnapshot), and promotes it (Phase 7). The joiner's `--peers` lists the old members only so it can answer them; replies travel on the connection the leader opened, and the leader learns the joiner's address from the add-server request. After the node has joined, restarting it with the same flags is fine: the log and snapshot decide the config.
+
+### Process layout
+
+Two ports per node: Raft peer RPCs (`--raft-port`) and KV plus admin RPCs (`--client-port`). The node's clock is a `SkewedClock` over `RealClock`, which at offset 0 and rate 1 reads real time. SIGTERM/SIGINT stop client intake (bounded wait), then Raft, then close the listeners and the WAL. `kill -9` is the crash path and relies only on the fsync-before-reply rules from Phase 3.
+
+### Admin service ([admin.go](../internal/admin/admin.go))
+
+`Status` reports role, term, commit index, last applied, leader and config (`"id voter addr"` strings). `SetClock` jumps the node's clock by `offset_ms` and then sets the drift rate; timers already armed keep their old period (known limit, revisited in Phase 9). `SetNetRules` forwards to a `NetworkRules` interface; the server runs it with a `StubNetwork` that only records the rules. Phase 9's faulty transport implements `NetworkRules` and replaces the stub in `cmd/server`; nothing else changes.
+
+### Test-harness fix: load-robust waits
+
+`TestSnapshotChurn` failed twice under heavy machine load (seed 166000) with "no agreement on 5 nodes within 10s" and never on an idle machine. The cause was in the harness, not Raft. Waits are budgeted in FakeClock time, but the fake clock moves a fixed step per yield of real time (1 ms in `Cluster.sleep`, 150 us in `advance`). When the machine is starved the nodes get far fewer scheduler turns per simulated second, so a 10 s fake budget can run out before the cluster has done the work that normally fits in 2 s. `Cluster.Within` now lets a FakeClock wait outlive its fake budget until 45 s of real time have passed (`loadGrace`); passing runs return as soon as the condition holds, so only a real failure takes longer. It is used by `One`, `CheckOneLeader` and the `waitFor`/`drive`/`until`/`waitConverged` helpers; the one real-time poll (`eventually`) got a 30 s cap instead of 2 s. No assertion changed. The flake did not reproduce here before the fix (60 parallel `-cpu 2` processes of the race build, 2 runs each, all passed), so the diagnosis comes from reading the waits, not from watching it fail.

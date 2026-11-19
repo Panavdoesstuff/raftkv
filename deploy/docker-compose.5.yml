@@ -1,0 +1,60 @@
+# 5-node RaftKV cluster. Hostnames n1..n5, Raft on :7000, KV/admin on :8000
+# (published on the host as 800N for node N). One named volume per node.
+# The joiner n6 is not started by 'up'; add it with the 'join' profile:
+#   docker compose -f deploy/docker-compose.5.yml --profile join up -d n6
+#   client add-server n6 n6:7000 n6:8000
+name: raftkv5
+x-node: &node
+  image: raftkv:latest
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+  restart: "no"
+  stop_grace_period: 10s
+  environment:
+    RAFT_DEBUG: "${RAFT_DEBUG:-0}"
+services:
+  n1:
+    <<: *node
+    hostname: n1
+    command: ["--id=n1", "--peers=n1=n1:7000,n2=n2:7000,n3=n3:7000,n4=n4:7000,n5=n5:7000", "--read-mode=${READ_MODE:-readindex}"]
+    ports: ["8001:8000"]
+    volumes: ["n1-data:/data"]
+  n2:
+    <<: *node
+    hostname: n2
+    command: ["--id=n2", "--peers=n1=n1:7000,n2=n2:7000,n3=n3:7000,n4=n4:7000,n5=n5:7000", "--read-mode=${READ_MODE:-readindex}"]
+    ports: ["8002:8000"]
+    volumes: ["n2-data:/data"]
+  n3:
+    <<: *node
+    hostname: n3
+    command: ["--id=n3", "--peers=n1=n1:7000,n2=n2:7000,n3=n3:7000,n4=n4:7000,n5=n5:7000", "--read-mode=${READ_MODE:-readindex}"]
+    ports: ["8003:8000"]
+    volumes: ["n3-data:/data"]
+  n4:
+    <<: *node
+    hostname: n4
+    command: ["--id=n4", "--peers=n1=n1:7000,n2=n2:7000,n3=n3:7000,n4=n4:7000,n5=n5:7000", "--read-mode=${READ_MODE:-readindex}"]
+    ports: ["8004:8000"]
+    volumes: ["n4-data:/data"]
+  n5:
+    <<: *node
+    hostname: n5
+    command: ["--id=n5", "--peers=n1=n1:7000,n2=n2:7000,n3=n3:7000,n4=n4:7000,n5=n5:7000", "--read-mode=${READ_MODE:-readindex}"]
+    ports: ["8005:8000"]
+    volumes: ["n5-data:/data"]
+  n6:
+    <<: *node
+    hostname: n6
+    profiles: ["join"]
+    command: ["--id=n6", "--peers=n1=n1:7000,n2=n2:7000,n3=n3:7000,n4=n4:7000,n5=n5:7000,n6=n6:7000", "--join", "--read-mode=${READ_MODE:-readindex}"]
+    ports: ["8006:8000"]
+    volumes: ["n6-data:/data"]
+volumes:
+  n1-data:
+  n2-data:
+  n3-data:
+  n4-data:
+  n5-data:
+  n6-data:
