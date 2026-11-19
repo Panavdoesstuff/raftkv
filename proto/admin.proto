@@ -30,9 +30,14 @@ message SetNetRulesRequest {
 }
 message SetNetRulesReply {}
 
+// offset_ms is ABSOLUTE: when set_offset is true (or offset_ms != 0) the node's
+// clock skew (its reading minus real time) is set to exactly offset_ms, so
+// the same request twice is the same as once and offset_ms 0 with set_offset
+// removes any jump. drift_rate <= 0 leaves the rate unchanged.
 message SetClockRequest {
   int64 offset_ms = 1;
   double drift_rate = 2; // 1.0 = real time
+  bool set_offset = 3;
 }
 message SetClockReply {}
 

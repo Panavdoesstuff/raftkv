@@ -7,6 +7,7 @@ import (
 
 	"github.com/panavdoesstuff/raftkv/internal/clock"
 	"github.com/panavdoesstuff/raftkv/internal/raft"
+	"github.com/panavdoesstuff/raftkv/internal/transport"
 	"github.com/panavdoesstuff/raftkv/proto/adminpb"
 )
 
@@ -38,7 +39,7 @@ func TestStatus(t *testing.T) {
 func TestSetClockAndNetRules(t *testing.T) {
 	base := clock.NewFake()
 	sk := clock.NewSkewed(base, 0, 1)
-	stub := &StubNetwork{}
+	stub := transport.NewFaultNet(1, base)
 	s := New(fakeNode{}, sk, stub, nil)
 	t0 := sk.Now()
 	if _, err := s.SetClock(context.Background(), &adminpb.SetClockRequest{OffsetMs: 5000, DriftRate: 0.5}); err != nil {
@@ -60,5 +61,32 @@ func TestSetClockAndNetRules(t *testing.T) {
 	s.SetNetRules(context.Background(), &adminpb.SetNetRulesRequest{ClearAll: true})
 	if len(stub.Rules()) != 0 {
 		t.Fatal("clear_all did not clear")
+	}
+}
+
+func TestSetClockOffsetIsAbsolute(t *testing.T) {
+	base := clock.NewFake()
+	sk := clock.NewSkewed(base, 0, 1)
+	s := New(fakeNode{}, sk, nil, nil)
+	ctx := context.Background()
+	for i := 0; i < 2; i++ { // the same request twice is the same as once
+		if _, err := s.SetClock(ctx, &adminpb.SetClockRequest{OffsetMs: 3000}); err != nil {
+			t.Fatal(err)
+		}
+		if got := sk.Offset(); got != 3*time.Second {
+			t.Fatalf("request %d: skew %v, want 3s", i, got)
+		}
+	}
+	// offset 0 with set_offset removes the jump; without it, 0 means "leave alone".
+	s.SetClock(ctx, &adminpb.SetClockRequest{DriftRate: 2})
+	if got := sk.Offset(); got != 3*time.Second {
+		t.Fatalf("rate-only request moved the offset to %v", got)
+	}
+	s.SetClock(ctx, &adminpb.SetClockRequest{SetOffset: true})
+	if got := sk.Offset(); got != 0 {
+		t.Fatalf("set_offset 0: skew %v", got)
+	}
+	if sk.Rate() != 2 {
+		t.Fatalf("rate %v", sk.Rate())
 	}
 }

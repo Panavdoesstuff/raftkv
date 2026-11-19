@@ -338,10 +338,15 @@ func (*SetNetRulesReply) Descriptor() ([]byte, []int) {
 	return file_proto_admin_proto_rawDescGZIP(), []int{4}
 }
 
+// offset_ms is ABSOLUTE: when set_offset is true (or offset_ms != 0) the node's
+// clock skew (its reading minus real time) is set to exactly offset_ms, so
+// the same request twice is the same as once and offset_ms 0 with set_offset
+// removes any jump. drift_rate <= 0 leaves the rate unchanged.
 type SetClockRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	OffsetMs      int64                  `protobuf:"varint,1,opt,name=offset_ms,json=offsetMs,proto3" json:"offset_ms,omitempty"`
 	DriftRate     float64                `protobuf:"fixed64,2,opt,name=drift_rate,json=driftRate,proto3" json:"drift_rate,omitempty"` // 1.0 = real time
+	SetOffset     bool                   `protobuf:"varint,3,opt,name=set_offset,json=setOffset,proto3" json:"set_offset,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -388,6 +393,13 @@ func (x *SetClockRequest) GetDriftRate() float64 {
 		return x.DriftRate
 	}
 	return 0
+}
+
+func (x *SetClockRequest) GetSetOffset() bool {
+	if x != nil {
+		return x.SetOffset
+	}
+	return false
 }
 
 type SetClockReply struct {
@@ -454,11 +466,13 @@ const file_proto_admin_proto_rawDesc = "" +
 	"\x12SetNetRulesRequest\x12+\n" +
 	"\x05rules\x18\x01 \x03(\v2\x15.raftkv.admin.NetRuleR\x05rules\x12\x1b\n" +
 	"\tclear_all\x18\x02 \x01(\bR\bclearAll\"\x12\n" +
-	"\x10SetNetRulesReply\"M\n" +
+	"\x10SetNetRulesReply\"l\n" +
 	"\x0fSetClockRequest\x12\x1b\n" +
 	"\toffset_ms\x18\x01 \x01(\x03R\boffsetMs\x12\x1d\n" +
 	"\n" +
-	"drift_rate\x18\x02 \x01(\x01R\tdriftRate\"\x0f\n" +
+	"drift_rate\x18\x02 \x01(\x01R\tdriftRate\x12\x1d\n" +
+	"\n" +
+	"set_offset\x18\x03 \x01(\bR\tsetOffset\"\x0f\n" +
 	"\rSetClockReply2\xe2\x01\n" +
 	"\x05Admin\x12@\n" +
 	"\x06Status\x12\x1b.raftkv.admin.StatusRequest\x1a\x19.raftkv.admin.StatusReply\x12O\n" +

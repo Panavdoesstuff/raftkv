@@ -60,6 +60,7 @@ func run() error {
 		dataDir    = flag.String("data-dir", "", "directory for the WAL and snapshots (required)")
 		readMode   = flag.String("read-mode", "log", "how Gets are served: log|readindex|lease")
 		join       = flag.Bool("join", false, "start as a non-voter with an empty log, to be added with add-server")
+		seed       = flag.Int64("seed", 0, "seed for the fault injector's randomness (0: derive from the clock and pid)")
 		maxLog     = flag.Int("max-log-bytes", kv.DefaultMaxLogBytes, "snapshot when the Raft log passes this many bytes")
 	)
 	flag.Parse()
@@ -75,6 +76,9 @@ func run() error {
 		return err
 	}
 	self := raft.NodeID(*id)
+	if *seed == 0 {
+		*seed = time.Now().UnixNano() ^ int64(os.Getpid())
+	}
 
 	level := slog.LevelInfo
 	if os.Getenv("RAFT_DEBUG") == "1" {
@@ -104,11 +108,18 @@ func run() error {
 
 	// The node's clock is a SkewedClock over the wall clock so the admin
 	// service can skew it (Phase 9). At rate 1, offset 0 it is the real clock.
+	// The same clock drives Raft's election and heartbeat deadlines, the lease
+	// check and the KV server's timers, so a skew reaches all of them.
 	clk := clock.NewSkewed(clock.RealClock{}, 0, 1)
 	tr := transport.NewGRPC(self, fmt.Sprintf("%s:%d", *host, *raftPort), addrs)
+	// The fault injector: every outgoing Raft RPC goes through the rules the
+	// chaos controller sets over the admin SetNetRules RPC (none by default).
+	faults := transport.NewFaultNet(*seed, clk)
+	faults.SetLocal(self)
+	defer faults.Close()
 	store := kv.NewStore()
 	node := raft.New(raft.Config{
-		ID: self, Peers: voters, Transport: tr, Clock: clk, Storage: fs, SM: store,
+		ID: self, Peers: voters, Transport: faults.Wrap(self, tr), Clock: clk, Storage: fs, SM: store,
 		Seed: time.Now().UnixNano() ^ int64(os.Getpid()),
 	})
 	srv := kv.NewServer(node, store, clk, kv.WithMaxLogBytes(*maxLog), kv.WithReadMode(mode))
@@ -131,7 +142,7 @@ func run() error {
 	}
 	gs := grpc.NewServer()
 	kvpb.RegisterKVServer(gs, kv.GRPCService{S: srv})
-	adminpb.RegisterAdminServer(gs, admin.New(node, clk, &admin.StubNetwork{}, log))
+	adminpb.RegisterAdminServer(gs, admin.New(node, clk, faults, log))
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- gs.Serve(lis) }()
 

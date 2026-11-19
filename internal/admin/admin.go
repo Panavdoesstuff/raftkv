@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -23,36 +22,13 @@ type Node interface {
 	Config() raft.ClusterConfig
 }
 
-// NetworkRules applies per-link fault rules. Phase 9's faulty transport
-// implements it; until then a node runs with StubNetwork.
+// NetworkRules applies per-link fault rules. transport.FaultNet (the faulty
+// wrapper around the node's real transport) implements it.
 type NetworkRules interface {
 	// SetRules replaces the rule set (clearAll true: drop every rule first,
-	// then apply rules, which may be empty).
+	// then apply rules, which may be empty). A rule replaces the rule for the
+	// same (from, to) pair; an all-zero rule removes it.
 	SetRules(clearAll bool, rules []*adminpb.NetRule) error
-}
-
-// StubNetwork accepts rules and remembers them but injects nothing. It lets the
-// SetNetRules RPC be exercised end to end before the faulty transport exists.
-type StubNetwork struct {
-	mu    sync.Mutex
-	rules []*adminpb.NetRule
-}
-
-func (s *StubNetwork) SetRules(clearAll bool, rules []*adminpb.NetRule) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if clearAll {
-		s.rules = nil
-	}
-	s.rules = append(s.rules, rules...)
-	return nil
-}
-
-// Rules returns the rules received so far.
-func (s *StubNetwork) Rules() []*adminpb.NetRule {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]*adminpb.NetRule(nil), s.rules...)
 }
 
 // Service implements adminpb.AdminServer.
@@ -106,14 +82,17 @@ func (s *Service) SetNetRules(ctx context.Context, r *adminpb.SetNetRulesRequest
 	return &adminpb.SetNetRulesReply{}, nil
 }
 
-// SetClock jumps the node's clock by offset_ms (positive: forward; zero: no
-// jump) and then sets the drift rate (1.0 is real time; <= 0 leaves the rate
-// unchanged). Timers created before a rate change keep their old period.
+// SetClock sets the node's clock fault. offset_ms is ABSOLUTE: if set_offset
+// is true or offset_ms is non-zero, the node's skew (its clock minus real
+// time) becomes exactly offset_ms, so repeating a request changes nothing and
+// offset_ms 0 with set_offset removes a jump. drift_rate sets the speed of the
+// clock (1.0 is real time; <= 0 leaves the rate unchanged). A rate change also
+// rescales timers and tickers that are already armed (clock.SkewedClock).
 func (s *Service) SetClock(ctx context.Context, r *adminpb.SetClockRequest) (*adminpb.SetClockReply, error) {
 	if s.clk == nil {
 		return nil, status.Error(codes.Unimplemented, "node clock is not skewable")
 	}
-	if r.OffsetMs != 0 {
+	if r.SetOffset || r.OffsetMs != 0 {
 		s.clk.SetOffset(time.Duration(r.OffsetMs) * time.Millisecond)
 	}
 	if r.DriftRate > 0 {
