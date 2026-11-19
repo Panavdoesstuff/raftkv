@@ -3,3 +3,4 @@ chaos-failures/
 *.out
 .DS_Store
 stress.log
+chaos-runs/
