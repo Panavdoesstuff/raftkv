@@ -10,7 +10,6 @@ import (
 	"runtime"
 	"sort"
 	"sync"
-	"testing"
 	"time"
 
 	"github.com/panavdoesstuff/raftkv/internal/clock"
@@ -18,6 +17,17 @@ import (
 	"github.com/panavdoesstuff/raftkv/internal/storage"
 	"github.com/panavdoesstuff/raftkv/internal/transport"
 )
+
+// T is the part of testing.TB the harness uses, so the chaos runner (which has
+// no *testing.T) can drive the same cluster. *testing.T satisfies it.
+type T interface {
+	Helper()
+	Logf(format string, args ...any)
+	Errorf(format string, args ...any)
+	Fatalf(format string, args ...any)
+	Cleanup(func())
+	Failed() bool
+}
 
 // Config is everything a node needs; the harness owns all of it.
 type Config struct {
@@ -63,7 +73,7 @@ type member struct {
 }
 
 type Cluster struct {
-	t       testing.TB
+	t       T
 	Seed    int64
 	Net     *transport.Memnet
 	Clock   clock.Clock
@@ -87,6 +97,13 @@ func WithFakeClock() Option {
 	return func(c *Cluster) { f := clock.NewFake(); c.fake, c.Clock = f, f }
 }
 
+// WithClock runs the whole cluster on the given FakeClock, which the caller
+// advances (or which Cluster.Advance advances). Use it when something outside
+// the cluster, such as a fault-injecting transport, must share the clock.
+func WithClock(f *clock.FakeClock) Option {
+	return func(c *Cluster) { c.fake, c.Clock = f, f }
+}
+
 // WithNodeClock gives each node its own view of the cluster clock (e.g. a
 // clock.SkewedClock over the shared FakeClock). Memnet delays and the harness
 // itself keep using the base clock.
@@ -101,7 +118,7 @@ func WithStateMachine(f func() raft.StateMachine) Option {
 
 // StartCluster creates n nodes named n0..n{n-1} and starts them. The seed is
 // logged if the test fails; rerun with the same seed to reproduce.
-func StartCluster(t testing.TB, n int, seed int64, f Factory, opts ...Option) *Cluster {
+func StartCluster(t T, n int, seed int64, f Factory, opts ...Option) *Cluster {
 	t.Helper()
 	c := &Cluster{
 		t: t, Seed: seed, factory: f,
