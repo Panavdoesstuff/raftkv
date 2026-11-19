@@ -45,7 +45,9 @@ cli put smoke 1 >/dev/null || fail "initial put"
 
 step "docker kill the leader ($L): writes must resume"
 dc kill "$L"
+t0=$(date +%s)
 cli put after-kill ok >/dev/null || fail "write did not resume after killing $L"
+echo "failover: first successful write $(( $(date +%s) - t0 ))s after kill (includes docker run overhead)"
 [ "$(cli get after-kill)" = ok ] || fail "read after failover"
 [ "$(cli get smoke)" = 1 ] || fail "data lost across failover"
 dc start "$L"
