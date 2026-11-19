@@ -52,7 +52,7 @@ dc start "$L"
 sleep 3
 
 step "docker restart a node: it catches up from disk"
-V=$(for i in $(seq "$NODES"); do [ "n$i" != "$L" ] && echo "n$i"; done | head -1)
+V=$(for i in $(seq "$NODES"); do if [ "n$i" != "$L" ]; then echo "n$i"; fi; done | head -1)
 cli put before-restart 1 >/dev/null
 dc restart "$V"
 cli put while-restarting 1 >/dev/null || fail "write after restarting $V"
